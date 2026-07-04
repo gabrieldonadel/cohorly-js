@@ -1,0 +1,47 @@
+{
+  "name": "@cohorly/core",
+  "version": "0.1.0",
+  "description": "Transport-agnostic core client for Cohorly, local self-hosted product analytics (Mixpanel-style). Queueing, batching, flush, identity, and super properties, with storage and transport injected by platform SDKs.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "pnpm run build",
+    "test": "vitest run"
+  },
+  "keywords": [
+    "analytics",
+    "product-analytics",
+    "cohorly",
+    "mixpanel",
+    "tracking",
+    "telemetry"
+  ],
+  "author": "Giovanne Tarcitano",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Gitarcitano/cohorly-js",
+    "directory": "packages/sdk-core"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

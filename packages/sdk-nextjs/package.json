@@ -1,0 +1,57 @@
+{
+  "name": "@cohorly/nextjs",
+  "version": "0.1.0",
+  "description": "Next.js integration for Cohorly, local self-hosted product analytics (Mixpanel-style). Re-exports the React client provider and createCohorlyProxy() for a first-party ingestion route handler.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "default": "./dist/server.js"
+    }
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "pnpm run build"
+  },
+  "keywords": [
+    "analytics",
+    "product-analytics",
+    "cohorly",
+    "mixpanel",
+    "tracking",
+    "nextjs",
+    "next.js"
+  ],
+  "author": "Giovanne Tarcitano",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Gitarcitano/cohorly-js",
+    "directory": "packages/sdk-nextjs"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@cohorly/react": "workspace:*"
+  },
+  "peerDependencies": {
+    "next": ">=13",
+    "react": ">=18"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.0",
+    "typescript": "^5.7.2"
+  }
+}

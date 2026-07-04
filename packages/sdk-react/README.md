@@ -1,0 +1,57 @@
+# @cohorly/react
+
+React bindings for Cohorly (local, self-hosted, Mixpanel-style product analytics).
+`<CohorlyProvider>` initializes the `@cohorly/web` client on mount; `useCohorly()` gives
+any descendant component access to it.
+
+## Install
+
+```bash
+pnpm add @cohorly/react
+# or: npm install @cohorly/react / yarn add @cohorly/react
+```
+
+## Quickstart
+
+```tsx
+import { CohorlyProvider, useCohorly } from "@cohorly/react";
+
+function App() {
+  return (
+    <CohorlyProvider
+      apiHost="https://your-cohorly-server.example.com"
+      token="YOUR_PROJECT_TOKEN"
+      trackPageviews
+    >
+      <Dashboard />
+    </CohorlyProvider>
+  );
+}
+
+function Dashboard() {
+  const cohorly = useCohorly();
+  return (
+    <button onClick={() => cohorly.track("Button Clicked", { button: "upgrade" })}>
+      Upgrade
+    </button>
+  );
+}
+```
+
+## API reference
+
+| Member | Signature | Notes |
+| --- | --- | --- |
+| `<CohorlyProvider>` | props = `CohorlyWebOptions & { children? }` | Same options as `@cohorly/web`'s `init()`: `apiHost`, `token`, `flushIntervalMs`, `batchSize`, `debug`, `trackPageviews`, `superProperties`. |
+| `useCohorly()` | `() => Cohorly` | Must be called within a `<CohorlyProvider>`; throws otherwise. Returns the same client shape as `@cohorly/web`'s `cohorly` singleton (`track`, `identify`, `reset`, `register`, `unregister`, `people.*`, `flush`, `getDistinctId`, `isAnonymous`). |
+
+Requires React 18+ (peer dependency). `<CohorlyProvider>` is a client component
+(`"use client"`); wrap it around the parts of your tree that need tracking, typically near
+the root.
+
+## `token`
+
+Pass `token` as a prop on `<CohorlyProvider>` to stamp your project token on every event
+and every `/engage`/`/alias` body. In a Next.js app, prefer `@cohorly/nextjs`'s
+`createCohorlyProxy({ token })` server-side mode if you want to avoid embedding the token
+in the client bundle - see that package's README for both modes.

@@ -1,0 +1,47 @@
+{
+  "name": "@cohorly/web",
+  "version": "0.1.0",
+  "description": "Browser SDK for Cohorly, local self-hosted product analytics (Mixpanel-style). localStorage persistence, fetch/sendBeacon transport, and SPA pageview autotracking on top of @cohorly/core.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "pnpm run build"
+  },
+  "keywords": [
+    "analytics",
+    "product-analytics",
+    "cohorly",
+    "mixpanel",
+    "tracking",
+    "web-analytics"
+  ],
+  "author": "Giovanne Tarcitano",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Gitarcitano/cohorly-js",
+    "directory": "packages/sdk-web"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@cohorly/core": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}
