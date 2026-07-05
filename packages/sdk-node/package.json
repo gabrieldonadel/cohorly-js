@@ -1,0 +1,50 @@
+{
+  "name": "@cohorly/node",
+  "version": "0.1.0",
+  "description": "Server-side Node.js SDK for Cohorly, local self-hosted product analytics (Mixpanel-style). Stateless mixpanel-node-like API: track with explicit distinct_id, batching queue with retry/backoff, people profile ops, alias.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "prepublishOnly": "pnpm run build"
+  },
+  "keywords": [
+    "analytics",
+    "product-analytics",
+    "cohorly",
+    "mixpanel",
+    "tracking",
+    "node",
+    "server-side"
+  ],
+  "author": "Giovanne Tarcitano",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Gitarcitano/cohorly-js",
+    "directory": "packages/sdk-node"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

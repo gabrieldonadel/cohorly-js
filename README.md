@@ -8,6 +8,8 @@ Official JavaScript/TypeScript SDKs for [Cohorly](https://cohorly.com), a produc
 | [`@cohorly/react`](packages/sdk-react) | React apps (`<CohorlyProvider>` + `useCohorly()`) |
 | [`@cohorly/nextjs`](packages/sdk-nextjs) | Next.js App Router (provider + first-party proxy route) |
 | [`@cohorly/react-native`](packages/sdk-react-native) | React Native / Expo |
+| [`@cohorly/node`](packages/sdk-node) | Node.js backends (mirrors mixpanel-node) |
+| [`@cohorly/nest`](packages/sdk-nest) | NestJS module wrapping @cohorly/node |
 | [`@cohorly/core`](packages/sdk-core) | Transport-agnostic core (used by the SDKs above) |
 
 Looking for iOS? See [cohorly-swift](https://github.com/Gitarcitano/cohorly-swift).
