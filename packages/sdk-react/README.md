@@ -1,6 +1,6 @@
 # @cohorly/react
 
-React bindings for Cohorly (local, self-hosted, Mixpanel-style product analytics).
+React bindings for Cohorly (hosted, Mixpanel-style product analytics).
 `<CohorlyProvider>` initializes the `@cohorly/web` client on mount; `useCohorly()` gives
 any descendant component access to it.
 
@@ -18,11 +18,7 @@ import { CohorlyProvider, useCohorly } from "@cohorly/react";
 
 function App() {
   return (
-    <CohorlyProvider
-      apiHost="https://your-cohorly-server.example.com"
-      token="YOUR_PROJECT_TOKEN"
-      trackPageviews
-    >
+    <CohorlyProvider token="YOUR_PROJECT_TOKEN" trackPageviews>
       <Dashboard />
     </CohorlyProvider>
   );

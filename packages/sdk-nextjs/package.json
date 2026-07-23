@@ -1,7 +1,7 @@
 {
   "name": "@cohorly/nextjs",
-  "version": "0.1.0",
-  "description": "Next.js integration for Cohorly, local self-hosted product analytics (Mixpanel-style). Re-exports the React client provider and createCohorlyProxy() for a first-party ingestion route handler.",
+  "version": "0.2.3",
+  "description": "Next.js integration for Cohorly, hosted product analytics (Mixpanel-style). Re-exports the React client provider and createCohorlyProxy() for a first-party ingestion route handler.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

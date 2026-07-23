@@ -1,6 +1,6 @@
 # @cohorly/node
 
-Server-side Node.js SDK for [Cohorly](https://github.com/Gitarcitano/cohorly-js), local self-hosted product analytics (Mixpanel-style). The API mirrors the official `mixpanel` npm library: stateless, `distinct_id` passed explicitly on every call, optional Node-style callbacks, plus first-class promises.
+Server-side Node.js SDK for [Cohorly](https://github.com/Gitarcitano/cohorly-js), hosted product analytics (Mixpanel-style). The API mirrors the official `mixpanel` npm library: stateless, `distinct_id` passed explicitly on every call, optional Node-style callbacks, plus first-class promises.
 
 Requires Node 18+ (global `fetch`). Zero runtime dependencies.
 
@@ -17,7 +17,7 @@ import Cohorly from "@cohorly/node";
 
 // Grab your project token from the Cohorly dashboard (Settings -> Projects).
 const cohorly = Cohorly.init("<YOUR_PROJECT_TOKEN>", {
-  host: "http://localhost:4000", // your Cohorly server
+  host: "https://cohorly-service.velloalabs.com", // your Cohorly server
 });
 
 // Track an event. distinct_id is required (server-side style).
@@ -49,7 +49,7 @@ import express from "express";
 import Cohorly from "@cohorly/node";
 
 const cohorly = Cohorly.init(process.env.COHORLY_TOKEN!, {
-  host: process.env.COHORLY_HOST ?? "http://localhost:4000",
+  host: process.env.COHORLY_HOST ?? "https://cohorly-service.velloalabs.com",
 });
 
 const app = express();
@@ -74,7 +74,7 @@ app.listen(3000);
 
 ```ts
 const cohorly = Cohorly.init(token, {
-  host: "http://localhost:4000", // Cohorly server base URL
+  host: "https://cohorly-service.velloalabs.com", // Cohorly server base URL
   flushIntervalMs: 5000,         // auto-flush timer (0 disables it)
   batchSize: 20,                 // flush at this queue size (clamped to 500)
   debug: false,                  // console.warn SDK activity
@@ -113,6 +113,15 @@ cohorly.people.delete_user("user-13793");
 ```
 
 camelCase aliases exist for TypeScript comfort: `setOnce`, `deleteUser`.
+
+> **`unset` / `delete_user` are gated server-side.** These map to the
+> destructive `/engage` `$unset`/`$delete` verbs, which the server refuses when
+> the request carries only the project token; they require an org-owner or
+> superadmin `Authorization` credential that this SDK does not send. The server
+> answers HTTP 200 with `{ status: 0, ..., refused }` and skips the op. Remove
+> profile data from the dashboard, or delete a person (with an audit trail) via
+> `DELETE /api/privacy/subjects/:distinctId`. The other people verbs are
+> unaffected.
 
 ## Aliases
 

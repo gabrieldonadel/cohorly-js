@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { CohorlyClient } from "../src/client.js";
-import { createFakeFetch, FakeStorage } from "./helpers.js";
+import {
+  createFakeFetch,
+  createProgrammableFetch,
+  FakeStorage,
+} from "./helpers.js";
 
 describe("track payload shape", () => {
   it("includes distinct_id, time, $insert_id, $lib and merges super props", async () => {
@@ -164,6 +168,149 @@ describe("identify persistence", () => {
   });
 });
 
+describe("$device_id / $user_id stamping", () => {
+  it("stamps $device_id on every event and it survives identify()", async () => {
+    const { fetchImpl, requests } = createFakeFetch();
+    const client = new CohorlyClient({
+      apiHost: "http://localhost:4000",
+      storage: new FakeStorage(),
+      fetch: fetchImpl,
+      flushAt: 100,
+    });
+    await client.ready;
+    const deviceId = client.getDeviceId();
+    expect(deviceId).toBeTruthy();
+
+    client.track("before");
+    client.identify("user-1");
+    client.track("after");
+    await client.flush();
+    client.stop();
+
+    const events = requests[0].body as any[];
+    expect(events[0].properties.$device_id).toBe(deviceId);
+    expect(events[1].properties.$device_id).toBe(deviceId);
+    // Device id is preserved across identify().
+    expect(client.getDeviceId()).toBe(deviceId);
+  });
+
+  it("stamps $user_id only once identified (equal to distinct_id)", async () => {
+    const { fetchImpl, requests } = createFakeFetch();
+    const client = new CohorlyClient({
+      apiHost: "http://localhost:4000",
+      storage: new FakeStorage(),
+      fetch: fetchImpl,
+      flushAt: 100,
+    });
+    await client.ready;
+    client.track("anon");
+    client.identify("user-42");
+    client.track("known");
+    await client.flush();
+    client.stop();
+
+    const events = requests[0].body as any[];
+    expect(events[0].properties.$user_id).toBeUndefined();
+    expect(events[1].properties.$user_id).toBe("user-42");
+    expect(events[1].properties.distinct_id).toBe("user-42");
+  });
+
+  it("caller-supplied $device_id / $user_id win over the stamped values", async () => {
+    const { fetchImpl, requests } = createFakeFetch();
+    const client = new CohorlyClient({
+      apiHost: "http://localhost:4000",
+      storage: new FakeStorage(),
+      fetch: fetchImpl,
+      flushAt: 1,
+    });
+    await client.ready;
+    client.identify("user-1");
+    client.track("Custom", { $device_id: "my-device", $user_id: "my-user" });
+    await client.flush();
+    client.stop();
+
+    const [event] = requests[0].body as any[];
+    expect(event.properties.$device_id).toBe("my-device");
+    expect(event.properties.$user_id).toBe("my-user");
+  });
+
+  it("reset() mints a new device id (matching the new anon distinct id) and clears timers", async () => {
+    const { fetchImpl, requests } = createFakeFetch();
+    const client = new CohorlyClient({
+      apiHost: "http://localhost:4000",
+      storage: new FakeStorage(),
+      fetch: fetchImpl,
+      flushAt: 100,
+    });
+    await client.ready;
+    const beforeDevice = client.getDeviceId();
+
+    // A pending timed event must be dropped by reset().
+    client.timeEvent("Purchase");
+    client.reset();
+
+    const afterDevice = client.getDeviceId();
+    expect(afterDevice).not.toBe(beforeDevice);
+    expect(afterDevice).toBe(client.getDistinctId());
+
+    client.track("Purchase");
+    await client.flush();
+    client.stop();
+
+    const [event] = requests[0].body as any[];
+    expect(event.properties.$duration).toBeUndefined();
+    expect(event.properties.$device_id).toBe(afterDevice);
+  });
+
+  it("persists the device id across client instances (survives relaunch)", async () => {
+    const storage = new FakeStorage();
+    const client1 = new CohorlyClient({
+      apiHost: "http://localhost:4000",
+      storage,
+      fetch: createFakeFetch().fetchImpl,
+    });
+    await client1.ready;
+    const deviceId = client1.getDeviceId();
+    client1.identify("user-7");
+    client1.stop();
+
+    const client2 = new CohorlyClient({
+      apiHost: "http://localhost:4000",
+      storage,
+      fetch: createFakeFetch().fetchImpl,
+    });
+    await client2.ready;
+    expect(client2.getDeviceId()).toBe(deviceId);
+    client2.stop();
+  });
+
+  it("treats a migrating install without the anonymous flag as anonymous", async () => {
+    // Pre-seed only a distinct id (install predating the anonymous/device_id
+    // keys): must stay anonymous (no false $user_id) and reuse the distinct id
+    // as the device id, self-healing on the next identify().
+    const storage = new FakeStorage();
+    await storage.setItem("cohorly:distinct_id", "legacy-user");
+    const { fetchImpl, requests } = createFakeFetch();
+    const client = new CohorlyClient({
+      apiHost: "http://localhost:4000",
+      storage,
+      fetch: fetchImpl,
+      flushAt: 1,
+    });
+    await client.ready;
+    expect(client.getDistinctId()).toBe("legacy-user");
+    expect(client.getDeviceId()).toBe("legacy-user");
+
+    client.track("migrated");
+    await client.flush();
+    client.stop();
+
+    const [event] = requests[0].body as any[];
+    expect(event.properties.$user_id).toBeUndefined();
+    expect(event.properties.$device_id).toBe("legacy-user");
+  });
+});
+
 describe("token", () => {
   it("stamps token onto every tracked event's properties", async () => {
     const { fetchImpl, requests } = createFakeFetch();
@@ -221,6 +368,126 @@ describe("token", () => {
   });
 });
 
+describe("retry contract", () => {
+  async function queueLen(storage: FakeStorage): Promise<number> {
+    const raw = await storage.getItem("cohorly:queue");
+    return raw ? (JSON.parse(raw) as unknown[]).length : 0;
+  }
+
+  it("keeps the queue intact on 429 and does not drop events", async () => {
+    const { fetchImpl, requests } = createProgrammableFetch(() => ({
+      status: 429,
+      retryAfter: "60",
+    }));
+    const storage = new FakeStorage();
+    const client = new CohorlyClient({
+      apiHost: "http://localhost:4000",
+      storage,
+      fetch: fetchImpl,
+      flushAt: 20,
+    });
+    await client.ready;
+    client.track("a");
+    client.track("b");
+    await client.flush();
+
+    expect(requests).toHaveLength(1);
+    expect(await queueLen(storage)).toBe(2);
+    client.stop();
+  });
+
+  it("drops the batch permanently on 400", async () => {
+    const { fetchImpl, requests } = createProgrammableFetch(() => ({ status: 400 }));
+    const storage = new FakeStorage();
+    const client = new CohorlyClient({
+      apiHost: "http://localhost:4000",
+      storage,
+      fetch: fetchImpl,
+      flushAt: 20,
+    });
+    await client.ready;
+    client.track("a");
+    client.track("b");
+    await client.flush();
+
+    expect(requests).toHaveLength(1);
+    expect(await queueLen(storage)).toBe(0);
+    client.stop();
+  });
+
+  it("halves the effective batch size on 413 without dropping events", async () => {
+    let fail = true;
+    const { fetchImpl, requests } = createProgrammableFetch(() => ({
+      status: fail ? 413 : 200,
+    }));
+    const storage = new FakeStorage();
+    const client = new CohorlyClient({
+      apiHost: "http://localhost:4000",
+      storage,
+      fetch: fetchImpl,
+      flushAt: 8,
+    });
+    await client.ready;
+    ["a", "b", "c", "d"].forEach((e) => client.track(e)); // queue=4, below flushAt 8
+
+    await client.flush(); // batch 4, 413 -> halve 8->4
+    expect(await queueLen(storage)).toBe(4); // nothing dropped
+    await client.flush(); // batch 4, 413 -> halve 4->2
+    await client.flush(); // batch 2, 413 -> halve 2->1
+    fail = false;
+    await client.flush(); // batch 1, success
+
+    const trackReqs = requests.filter((r) => r.path === "/track");
+    expect(trackReqs.map((r) => (r.body as unknown[]).length)).toEqual([4, 4, 2, 1]);
+    client.stop();
+  });
+
+  it("respects Retry-After: retryAfter=0 allows the next auto-flush, a large value blocks it", async () => {
+    async function run(retryAfter: string): Promise<number> {
+      const { fetchImpl, requests } = createProgrammableFetch(() => ({
+        status: 429,
+        retryAfter,
+      }));
+      const storage = new FakeStorage();
+      const client = new CohorlyClient({
+        apiHost: "http://localhost:4000",
+        storage,
+        fetch: fetchImpl,
+        flushAt: 1,
+      });
+      await client.ready;
+      client.track("a"); // size trigger -> attempt 1 fails, sets backoff
+      await vi.waitFor(() => expect(requests.length).toBe(1));
+      await new Promise((r) => setTimeout(r, 10)); // let the flush settle + backoff set
+      client.track("b"); // size trigger honored/blocked by backoff
+      await new Promise((r) => setTimeout(r, 20));
+      client.stop();
+      return requests.length;
+    }
+
+    expect(await run("0")).toBe(2); // backoff elapsed -> retried
+    expect(await run("60")).toBe(1); // still backing off -> skipped
+  });
+
+  it("caps the persisted queue at maxQueueSize, dropping the oldest", async () => {
+    const storage = new FakeStorage();
+    const client = new CohorlyClient({
+      apiHost: "http://localhost:4000",
+      storage,
+      fetch: createFakeFetch().fetchImpl,
+      flushAt: 100_000, // never auto-flush
+      maxQueueSize: 3,
+    });
+    await client.ready;
+    ["a", "b", "c", "d", "e"].forEach((e) => client.track(e));
+
+    const raw = await storage.getItem("cohorly:queue");
+    const queued = JSON.parse(raw as string) as { event: string }[];
+    expect(queued.map((e) => e.event)).toEqual(["c", "d", "e"]);
+    client.stop();
+  });
+});
+
 describe("people (engage) queue", () => {
   it("sends $set payloads to /engage", async () => {
     const { fetchImpl, requests } = createFakeFetch();
@@ -241,5 +508,166 @@ describe("people (engage) queue", () => {
     const [payload] = requests[0].body as any[];
     expect(payload.distinct_id).toBe("user-9");
     expect(payload.$set).toEqual({ plan: "pro" });
+  });
+});
+
+describe("people profile default properties", () => {
+  it("merges $android_* defaults into people.set on Android, user keys winning", async () => {
+    const { fetchImpl, requests } = createFakeFetch();
+    const client = new CohorlyClient({
+      apiHost: "http://localhost:4000",
+      storage: new FakeStorage(),
+      fetch: fetchImpl,
+      flushAt: 1,
+      appVersion: "3.4.5",
+      appBuild: "99",
+      platformInfo: {
+        os: "Android",
+        osVersion: 34,
+        model: "Pixel 8",
+        manufacturer: "Google",
+        brand: "google",
+      },
+    });
+    await client.ready;
+    client.people.set({ plan: "pro", $android_brand: "custom" });
+    await client.flush();
+    client.stop();
+
+    const [payload] = requests[0].body as any[];
+    expect(payload.$set.plan).toBe("pro");
+    expect(payload.$set.$android_os).toBe("Android");
+    expect(payload.$set.$android_os_version).toBe("34");
+    expect(payload.$set.$android_app_version).toBe("3.4.5");
+    expect(payload.$set.$android_model).toBe("Pixel 8");
+    expect(payload.$set.$android_manufacturer).toBe("Google");
+    expect(typeof payload.$set.$android_lib_version).toBe("string");
+    // user key wins over the derived default
+    expect(payload.$set.$android_brand).toBe("custom");
+    // iOS keys are not attached on Android
+    expect("$ios_version" in payload.$set).toBe(false);
+  });
+
+  it("merges $ios_* defaults into people.setOnce on iOS with correct app-release/version mapping", async () => {
+    const { fetchImpl, requests } = createFakeFetch();
+    const client = new CohorlyClient({
+      apiHost: "http://localhost:4000",
+      storage: new FakeStorage(),
+      fetch: fetchImpl,
+      flushAt: 1,
+      appVersion: "1.2.3",
+      appBuild: "42",
+      platformInfo: { os: "iOS", osVersion: "17.0", model: "iPhone15,3" },
+    });
+    await client.ready;
+    client.people.setOnce({ first_seen: "2026-01-01", $ios_device_model: "custom" });
+    await client.flush();
+    client.stop();
+
+    const [payload] = requests[0].body as any[];
+    expect(payload.$set_once.first_seen).toBe("2026-01-01");
+    expect(payload.$set_once.$ios_version).toBe("17.0");
+    expect(payload.$set_once.$ios_app_release).toBe("1.2.3"); // app version
+    expect(payload.$set_once.$ios_app_version).toBe("42"); // build number
+    expect(typeof payload.$set_once.$ios_lib_version).toBe("string");
+    // user key wins over the derived default
+    expect(payload.$set_once.$ios_device_model).toBe("custom");
+    // android keys are not attached on iOS
+    expect("$android_os" in payload.$set_once).toBe(false);
+  });
+
+  it("does not attach profile defaults to people.increment", async () => {
+    const { fetchImpl, requests } = createFakeFetch();
+    const client = new CohorlyClient({
+      apiHost: "http://localhost:4000",
+      storage: new FakeStorage(),
+      fetch: fetchImpl,
+      flushAt: 1,
+      appVersion: "3.4.5",
+      platformInfo: { os: "Android", osVersion: 34 },
+    });
+    await client.ready;
+    client.people.increment({ logins: 1 });
+    await client.flush();
+    client.stop();
+
+    const [payload] = requests[0].body as any[];
+    expect(payload.$add).toEqual({ logins: 1 });
+    expect("$android_os" in payload.$add).toBe(false);
+  });
+});
+
+describe("timed events ($duration)", () => {
+  it("attaches $duration (seconds, 3 decimals) on the next track and clears the timer", async () => {
+    const { fetchImpl, requests } = createFakeFetch();
+    const client = new CohorlyClient({
+      apiHost: "http://localhost:4000",
+      storage: new FakeStorage(),
+      fetch: fetchImpl,
+      flushAt: 100,
+    });
+    await client.ready;
+
+    const originalNow = Date.now;
+    let now = 1_000_000;
+    Date.now = () => now;
+    try {
+      client.timeEvent("Checkout");
+      now += 2500; // 2.5s elapsed
+      client.track("Checkout", { total: 42 });
+      // Second track of the same event has no active timer -> no $duration.
+      now += 5000;
+      client.track("Checkout");
+    } finally {
+      Date.now = originalNow;
+    }
+    await client.flush();
+    client.stop();
+
+    const events = requests.flatMap((r) => r.body as any[]).filter((e) => e.event === "Checkout");
+    expect(events).toHaveLength(2);
+    expect(events[0].properties.$duration).toBe(2.5);
+    expect(events[0].properties.total).toBe(42);
+    expect("$duration" in events[1].properties).toBe(false);
+  });
+
+  it("clearTimedEvent cancels a pending timer so no $duration is attached", async () => {
+    const { fetchImpl, requests } = createFakeFetch();
+    const client = new CohorlyClient({
+      apiHost: "http://localhost:4000",
+      storage: new FakeStorage(),
+      fetch: fetchImpl,
+      flushAt: 1,
+    });
+    await client.ready;
+    client.timeEvent("Flow");
+    client.clearTimedEvent("Flow");
+    client.track("Flow");
+    await client.flush();
+    client.stop();
+
+    const [event] = requests[0].body as any[];
+    expect("$duration" in event.properties).toBe(false);
+  });
+
+  it("clearTimedEvents cancels all pending timers", async () => {
+    const { fetchImpl, requests } = createFakeFetch();
+    const client = new CohorlyClient({
+      apiHost: "http://localhost:4000",
+      storage: new FakeStorage(),
+      fetch: fetchImpl,
+      flushAt: 100,
+    });
+    await client.ready;
+    client.timeEvent("A");
+    client.timeEvent("B");
+    client.clearTimedEvents();
+    client.track("A");
+    client.track("B");
+    await client.flush();
+    client.stop();
+
+    const events = requests.flatMap((r) => r.body as any[]);
+    expect(events.every((e) => !("$duration" in e.properties))).toBe(true);
   });
 });

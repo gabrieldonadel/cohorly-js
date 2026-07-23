@@ -13,7 +13,7 @@ import type {
 import { uuid } from "./uuid.js";
 import { LIB_VERSION } from "./version.js";
 
-const DEFAULT_HOST = "http://localhost:4000";
+const DEFAULT_HOST = "https://cohorly-service.velloalabs.com";
 const DEFAULT_FLUSH_INTERVAL_MS = 5000;
 const DEFAULT_BATCH_SIZE = 20;
 const DEFAULT_MAX_QUEUE_SIZE = 1000;

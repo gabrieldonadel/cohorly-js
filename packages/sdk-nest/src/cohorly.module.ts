@@ -28,6 +28,7 @@ import type {
  * ```
  */
 @Module({})
+// biome-ignore lint/complexity/noStaticOnlyClass: NestJS dynamic modules must be a class decorated with @Module.
 export class CohorlyModule {
   static forRoot(options: CohorlyModuleOptions): DynamicModule {
     return {

@@ -15,7 +15,7 @@ export interface CohorlyModuleAsyncOptions
   extends Pick<ModuleMetadata, "imports"> {
   /** Factory returning the module options (sync or async). */
   useFactory: (
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // biome-ignore lint/suspicious/noExplicitAny: mirrors NestJS FactoryProvider - injected deps are of arbitrary types.
     ...args: any[]
   ) =>
     | Promise<Omit<CohorlyModuleOptions, "isGlobal">>

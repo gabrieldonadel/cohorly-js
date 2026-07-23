@@ -5,7 +5,7 @@
  *
  * Usage (app/api/cohorly/[...path]/route.ts):
  *
- *   export const { POST } = createCohorlyProxy({ apiHost: "http://localhost:4000" });
+ *   export const { POST } = createCohorlyProxy({ apiHost: "https://cohorly-service.velloalabs.com" });
  *
  * Then point the client SDK's apiHost at "/api/cohorly" and it will
  * transparently forward POST /api/cohorly/track (etc.) upstream.
@@ -29,7 +29,12 @@
  *    client SDK when using this mode.
  */
 export interface CohorlyProxyOptions {
-  apiHost: string;
+  /**
+   * Upstream Cohorly ingestion API to relay to. Defaults to the hosted
+   * endpoint (`https://cohorly-service.velloalabs.com`); only set this to
+   * point at a different deployment.
+   */
+  apiHost?: string;
   /** Upstream paths allowed to be forwarded. Defaults to track/engage/alias. */
   allowedPaths?: string[];
   /**
@@ -48,8 +53,10 @@ export interface CohorlyProxyHandlers {
   POST(request: Request, context?: RouteContext): Promise<Response>;
 }
 
-export function createCohorlyProxy(options: CohorlyProxyOptions): CohorlyProxyHandlers {
-  const apiHost = options.apiHost.replace(/\/$/, "");
+const DEFAULT_API_HOST = "https://cohorly-service.velloalabs.com";
+
+export function createCohorlyProxy(options: CohorlyProxyOptions = {}): CohorlyProxyHandlers {
+  const apiHost = (options.apiHost ?? DEFAULT_API_HOST).replace(/\/$/, "");
   const allowed = new Set(options.allowedPaths ?? ["track", "engage", "alias"]);
 
   async function POST(request: Request, context?: RouteContext): Promise<Response> {

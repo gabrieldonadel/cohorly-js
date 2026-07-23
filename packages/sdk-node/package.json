@@ -1,7 +1,7 @@
 {
   "name": "@cohorly/node",
-  "version": "0.1.0",
-  "description": "Server-side Node.js SDK for Cohorly, local self-hosted product analytics (Mixpanel-style). Stateless mixpanel-node-like API: track with explicit distinct_id, batching queue with retry/backoff, people profile ops, alias.",
+  "version": "0.2.2",
+  "description": "Server-side Node.js SDK for Cohorly, hosted product analytics (Mixpanel-style). Stateless mixpanel-node-like API: track with explicit distinct_id, batching queue with retry/backoff, people profile ops, alias.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -45,6 +45,6 @@
   },
   "devDependencies": {
     "typescript": "^5.7.2",
-    "vitest": "^2.1.8"
+    "vitest": "3.2.6"
   }
 }

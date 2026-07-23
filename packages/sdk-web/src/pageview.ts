@@ -1,3 +1,26 @@
+/** Mixpanel-compatible automatic web pageview event name. */
+export const PAGEVIEW_EVENT = "$mp_web_page_view";
+
+/**
+ * Properties for a `$mp_web_page_view` event, derived from the current
+ * location/document. Empty during SSR.
+ */
+export function getPageviewProperties(): Record<string, unknown> {
+  if (typeof window === "undefined" || typeof location === "undefined") {
+    return {};
+  }
+  const props: Record<string, unknown> = {
+    $current_url: location.href,
+    current_domain: location.hostname,
+    current_url_path: location.pathname,
+    current_url_search: location.search,
+  };
+  if (typeof document !== "undefined") {
+    props.current_page_title = document.title;
+  }
+  return props;
+}
+
 /**
  * Wire up SPA pageview autotracking by monkey-patching history.pushState /
  * replaceState (so route changes from client-side routers fire) and

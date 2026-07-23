@@ -20,7 +20,7 @@ export type {
  *
  * ```ts
  * import Cohorly from "@cohorly/node";
- * const cohorly = Cohorly.init("<project token>", { host: "http://localhost:4000" });
+ * const cohorly = Cohorly.init("<project token>", { host: "https://cohorly-service.velloalabs.com" });
  * cohorly.track("signup", { distinct_id: "user-1" });
  * ```
  */

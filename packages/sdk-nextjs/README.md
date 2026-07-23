@@ -1,6 +1,6 @@
 # @cohorly/nextjs
 
-Next.js integration for Cohorly (local, self-hosted, Mixpanel-style product analytics).
+Next.js integration for Cohorly (hosted, Mixpanel-style product analytics).
 Re-exports `@cohorly/react`'s `<CohorlyProvider>` / `useCohorly()`, plus
 `createCohorlyProxy()` for a first-party ingestion route handler.
 
@@ -21,11 +21,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html>
       <body>
-        <CohorlyProvider
-          apiHost="https://your-cohorly-server.example.com"
-          token="YOUR_PROJECT_TOKEN"
-          trackPageviews
-        >
+        <CohorlyProvider token="YOUR_PROJECT_TOKEN" trackPageviews>
           {children}
         </CohorlyProvider>
       </body>
@@ -53,8 +49,8 @@ the route handler inject the token server-side:
 import { createCohorlyProxy } from "@cohorly/nextjs/server";
 
 export const { POST } = createCohorlyProxy({
-  apiHost: "https://your-cohorly-server.example.com",
   token: "YOUR_PROJECT_TOKEN", // injected server-side into every forwarded body
+  // apiHost defaults to the hosted Cohorly API; set it to target a different deployment.
 });
 ```
 
@@ -77,6 +73,6 @@ requests to third-party analytics hosts, and keeps `apiHost` private.
 | Export | From | Notes |
 | --- | --- | --- |
 | `CohorlyProvider`, `useCohorly` | `@cohorly/nextjs` (re-exported from `@cohorly/react`) | See `@cohorly/react`'s README. |
-| `createCohorlyProxy(options)` | `@cohorly/nextjs/server` | `{ apiHost, allowedPaths?, token? }` -> `{ POST }` route handler. `allowedPaths` defaults to `["track", "engage", "alias"]`. |
+| `createCohorlyProxy(options)` | `@cohorly/nextjs/server` | `{ apiHost?, allowedPaths?, token? }` -> `{ POST }` route handler. `apiHost` defaults to the hosted API; `allowedPaths` defaults to `["track", "engage", "alias"]`. |
 
 Requires Next.js 13+ and React 18+ (peer dependencies).

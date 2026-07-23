@@ -31,7 +31,15 @@ export interface EngagePayload {
   $set?: Properties;
   $set_once?: Properties;
   $add?: Record<string, number>;
+  /**
+   * Destructive: the server refuses this op unless the request also carries an
+   * admin credential (superadmin key, or a Firebase token for an org owner) in
+   * the Authorization header, which this SDK does not send. Refused ops are
+   * skipped individually and the server answers HTTP 200 with
+   * `{ status: 0, ..., refused }`.
+   */
   $unset?: string[];
+  /** Destructive: same server-side credential requirement as `$unset`. */
   $delete?: boolean;
 }
 
@@ -46,7 +54,7 @@ export type CohorlyTransport = (
 ) => Promise<void>;
 
 export interface CohorlyConfig {
-  /** Base URL of the Cohorly ingestion server. Default "http://localhost:4000". */
+  /** Base URL of the Cohorly ingestion server. Default "https://cohorly-service.velloalabs.com". */
   host?: string;
   /** Auto-flush the event queue every N ms. Default 5000. 0 disables the timer. */
   flushIntervalMs?: number;
@@ -84,10 +92,20 @@ export interface CohorlyPeople {
   increment(distinctId: string, properties: Record<string, number>, callback?: Callback): Promise<void>;
   increment(distinctId: string, property: string, by?: number, callback?: Callback): Promise<void>;
 
-  /** $unset: remove profile properties. */
+  /**
+   * $unset: remove profile properties. Destructive: the server only honors it
+   * with an org-owner or superadmin Authorization credential, which this SDK
+   * (authenticated by the project token) does not send - the op is refused
+   * server-side. Remove properties from the dashboard or the admin API instead.
+   */
   unset(distinctId: string, properties: string | string[], callback?: Callback): Promise<void>;
 
-  /** $delete: delete the whole profile. */
+  /**
+   * $delete: delete the whole profile. Destructive: same server-side
+   * credential requirement as `unset` - refused on the project token alone.
+   * Use the dashboard or `DELETE /api/privacy/subjects/:distinctId` (audited)
+   * to delete a person.
+   */
   delete_user(distinctId: string, callback?: Callback): Promise<void>;
   deleteUser(distinctId: string, callback?: Callback): Promise<void>;
 }

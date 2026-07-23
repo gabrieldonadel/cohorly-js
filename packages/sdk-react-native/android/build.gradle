@@ -1,0 +1,49 @@
+buildscript {
+    ext.kotlin_version = rootProject.ext.has('kotlinVersion') ? rootProject.ext.kotlinVersion : '1.9.22'
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.1.0'
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+    }
+}
+
+apply plugin: 'com.android.library'
+apply plugin: 'kotlin-android'
+
+android {
+    namespace "com.cohorly.reactnative"
+    compileSdkVersion 34
+
+    defaultConfig {
+        minSdkVersion 21
+        targetSdkVersion 34
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+}
+
+repositories {
+    google()
+    mavenCentral()
+    // Real (non-vendored) dependency on the Cohorly Android SDK, published via
+    // JitPack from https://github.com/cohorly-io/cohorly-android (see that
+    // repo's tag v0.1.0 - confirmed built successfully on JitPack).
+    maven { url 'https://jitpack.io' }
+}
+
+dependencies {
+    implementation 'com.facebook.react:react-native:+'
+    // Brings AndroidDeviceInfo (app version/build/model/manufacturer/brand/
+    // carrier reads) - transitively pulls cohorly-android-core.
+    implementation 'com.github.cohorly-io.cohorly-android:cohorly-android:v0.1.0'
+}

@@ -1,6 +1,6 @@
 # @cohorly/nest
 
-NestJS integration for [Cohorly](https://github.com/Gitarcitano/cohorly-js), local self-hosted product analytics (Mixpanel-style). A standard dynamic module (`forRoot` / `forRootAsync`) plus an injectable `CohorlyService` wrapping [`@cohorly/node`](../sdk-node), with an automatic final flush on application shutdown.
+NestJS integration for [Cohorly](https://github.com/Gitarcitano/cohorly-js), hosted product analytics (Mixpanel-style). A standard dynamic module (`forRoot` / `forRootAsync`) plus an injectable `CohorlyService` wrapping [`@cohorly/node`](../sdk-node), with an automatic final flush on application shutdown.
 
 Supports `@nestjs/common` ^10 and ^11 (peer dependency). Requires Node 18+.
 
@@ -23,7 +23,7 @@ import { CohorlyModule } from "@cohorly/nest";
   imports: [
     CohorlyModule.forRoot({
       token: process.env.COHORLY_TOKEN!,
-      host: "http://localhost:4000",
+      host: "https://cohorly-service.velloalabs.com",
       isGlobal: true, // inject CohorlyService anywhere without re-importing
     }),
   ],
@@ -52,6 +52,12 @@ export class SignupService {
 
 `CohorlyService` exposes the full mixpanel-node-style surface: `track`, `trackBatch`, `import`, `importBatch`, `people.*` (`set`, `set_once`, `increment`, `unset`, `delete_user`), `alias`, `flush`, and the raw client at `service.client`.
 
+> Note: `people.unset` / `people.delete_user` are destructive and gated
+> server-side - the server refuses them on the project token alone (they need
+> an org-owner or superadmin `Authorization` credential this SDK does not
+> send) and answers HTTP 200 with `{ status: 0, ..., refused }`. Use the
+> dashboard or the admin privacy API for profile removal.
+
 ## Async configuration
 
 ```ts
@@ -64,7 +70,7 @@ CohorlyModule.forRootAsync({
   isGlobal: true,
   useFactory: (config: ConfigService) => ({
     token: config.getOrThrow("COHORLY_TOKEN"),
-    host: config.get("COHORLY_HOST") ?? "http://localhost:4000",
+    host: config.get("COHORLY_HOST") ?? "https://cohorly-service.velloalabs.com",
     debug: config.get("NODE_ENV") !== "production",
   }),
 });

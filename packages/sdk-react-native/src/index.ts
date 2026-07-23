@@ -1,12 +1,14 @@
 import { CohorlyClient } from "./client.js";
 import type { CohorlyOptions, Properties } from "./types.js";
 
-export { CohorlyClient } from "./client.js";
+export { CohorlyClient, TransportError } from "./client.js";
 export { InMemoryStorage } from "./storage.js";
 export type {
+  AppStateLike,
   AsyncStorageLike,
   CohorlyOptions,
   EngagePayload,
+  PlatformInfo,
   Properties,
   TrackEvent,
 } from "./types.js";
@@ -19,7 +21,7 @@ let sharedInstance: CohorlyClient | null = null;
  * import AsyncStorage from "@react-native-async-storage/async-storage";
  * import { init } from "@cohorly/react-native";
  *
- * init({ apiHost: "http://localhost:4000", storage: AsyncStorage });
+ * init({ apiHost: "https://cohorly-service.velloalabs.com", storage: AsyncStorage });
  * ```
  */
 export function init(options: CohorlyOptions): CohorlyClient {
@@ -29,7 +31,7 @@ export function init(options: CohorlyOptions): CohorlyClient {
 
 function client(): CohorlyClient {
   if (!sharedInstance) {
-    throw new Error("Cohorly: call init({ apiHost }) before using the SDK.");
+    throw new Error("Cohorly: call init() before using the SDK.");
   }
   return sharedInstance;
 }
@@ -58,8 +60,24 @@ export function getDistinctId(): string {
   return client().getDistinctId();
 }
 
+export function getDeviceId(): string {
+  return client().getDeviceId();
+}
+
 export function flush(): Promise<void> {
   return client().flush();
+}
+
+export function timeEvent(event: string): void {
+  client().timeEvent(event);
+}
+
+export function clearTimedEvent(event: string): void {
+  client().clearTimedEvent(event);
+}
+
+export function clearTimedEvents(): void {
+  client().clearTimedEvents();
 }
 
 export const people = {

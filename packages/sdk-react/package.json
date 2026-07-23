@@ -1,7 +1,7 @@
 {
   "name": "@cohorly/react",
-  "version": "0.1.0",
-  "description": "React bindings for Cohorly, local self-hosted product analytics (Mixpanel-style). <CohorlyProvider> and useCohorly() on top of @cohorly/web.",
+  "version": "0.2.3",
+  "description": "React bindings for Cohorly, hosted product analytics (Mixpanel-style). <CohorlyProvider> and useCohorly() on top of @cohorly/web.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

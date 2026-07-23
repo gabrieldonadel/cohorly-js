@@ -34,3 +34,24 @@ export function createFakeFetch(opts: { fail?: boolean } = {}) {
   };
   return { fetchImpl: fetchImpl as unknown as typeof fetch, requests };
 }
+
+/**
+ * Fake fetch whose status/headers are decided per call by `respond`, letting
+ * tests exercise the retry contract (429/400/413 + Retry-After).
+ */
+export function createProgrammableFetch(
+  respond: (n: number) => { status: number; retryAfter?: string },
+) {
+  const requests: FakeRequest[] = [];
+  const fetchImpl = async (url: string, init?: RequestInit) => {
+    const path = new URL(url).pathname;
+    const body = init?.body ? JSON.parse(init.body as string) : undefined;
+    requests.push({ path, body });
+    const { status, retryAfter } = respond(requests.length);
+    const headers: Record<string, string> = {};
+    if (retryAfter !== undefined) headers["retry-after"] = retryAfter;
+    const payload = status >= 200 && status < 300 ? JSON.stringify({ status: 1 }) : "error";
+    return new Response(payload, { status, headers });
+  };
+  return { fetchImpl: fetchImpl as unknown as typeof fetch, requests };
+}
