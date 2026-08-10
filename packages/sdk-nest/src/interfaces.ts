@@ -1,7 +1,12 @@
-import type { FactoryProvider, ModuleMetadata } from "@nestjs/common";
 import type { CohorlyConfig } from "@cohorly/node";
+import type { FactoryProvider, ModuleMetadata } from "@nestjs/common";
 
-/** Options for CohorlyModule.forRoot(): the @cohorly/node config + token. */
+/**
+ * Options for CohorlyModule.forRoot(): the @cohorly/node config + token.
+ * Every @cohorly/node config key passes straight through, including
+ * `flagSecret` / `flagPollIntervalMs` for local flag evaluation (ADR-0011);
+ * the poller is stopped by `onApplicationShutdown`.
+ */
 export interface CohorlyModuleOptions extends CohorlyConfig {
   /** Cohorly project token (ingestion auth). Required. */
   token: string;

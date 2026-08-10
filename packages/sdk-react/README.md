@@ -4,6 +4,8 @@ React bindings for Cohorly (hosted, Mixpanel-style product analytics).
 `<CohorlyProvider>` initializes the `@cohorly/web` client on mount; `useCohorly()` gives
 any descendant component access to it.
 
+**Documentation:** [React SDK reference](https://cohorly-docs.velloalabs.com/sdks/react) · [Quickstart](https://cohorly-docs.velloalabs.com/quickstart) · [HTTP API](https://cohorly-docs.velloalabs.com/api/ingestion)
+
 ## Install
 
 ```bash

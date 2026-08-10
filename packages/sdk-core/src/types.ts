@@ -29,6 +29,24 @@ export interface EngageOp {
   $delete?: boolean;
 }
 
+/**
+ * Result of evaluating one feature flag for a distinct id, as returned by
+ * POST /flags/evaluate (copied shape, see repo CLAUDE.md "Ownership").
+ */
+export interface FlagResult {
+  enabled: boolean;
+  variant: string | null;
+  payload: unknown | null;
+  reason: string;
+}
+
+/**
+ * Fetcher used for feature-flag evaluation: POSTs `body` as JSON to `url` and
+ * resolves with the parsed JSON response. MUST resolve `undefined` on any
+ * error (network, non-2xx, bad JSON) - it never throws into the caller.
+ */
+export type FlagsFetcher = (url: string, body: unknown) => Promise<unknown>;
+
 /** Storage abstraction injected by platform-specific SDKs (web/react-native/node). Synchronous. */
 export interface CohorlyStorage {
   get(key: string): string | null;
@@ -71,6 +89,18 @@ export interface CohorlyClientOptions {
    * Retry-After are both capped at this value. Defaults to 600000 (10 min).
    */
   maxRetryDelayMs?: number;
+  /**
+   * Fetcher for feature-flag evaluation requests (POST /flags/evaluate).
+   * Defaults to a global-fetch JSON fetcher that resolves `undefined` on any
+   * error, so a failed reload keeps the stale flag cache and never throws.
+   */
+  fetcher?: FlagsFetcher;
+  /**
+   * Track a `$feature_flag_called` event the first time each flag key/value is
+   * read via getFeatureFlag()/isFeatureEnabled(). Deduped in memory per
+   * identity session (cleared on identify()/reset()). Defaults to true.
+   */
+  sendExposureEvents?: boolean;
 }
 
 export interface PeopleProperties {

@@ -95,6 +95,30 @@ export interface CohorlyOptions {
   /** Injected `AppState`-like implementation. Defaults to lazily requiring
    * `react-native`'s `AppState`. Mainly for tests and non-RN callers. */
   appState?: AppStateLike;
+  /**
+   * Evaluate feature flags on init (POST /flags/evaluate for the current
+   * distinct id), once persisted state has hydrated. Default true; set false
+   * to call `reloadFeatureFlags()` yourself.
+   */
+  loadFeatureFlags?: boolean;
+  /**
+   * Track a `$feature_flag_called` event the first time each flag key/value is
+   * read via `getFeatureFlag()`/`isFeatureEnabled()`. Deduped in memory per
+   * identity session (cleared on identify()/reset()). Default true.
+   */
+  sendExposureEvents?: boolean;
+}
+
+/**
+ * Result of evaluating one feature flag for a distinct id, as returned by
+ * POST /flags/evaluate. Copied to keep this package standalone (see repo
+ * CLAUDE.md "Ownership" convention).
+ */
+export interface FlagResult {
+  enabled: boolean;
+  variant: string | null;
+  payload: unknown | null;
+  reason: string;
 }
 
 export interface TrackEvent {

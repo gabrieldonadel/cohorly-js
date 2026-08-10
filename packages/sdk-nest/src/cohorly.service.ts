@@ -1,19 +1,23 @@
-import { Inject, Injectable } from "@nestjs/common";
-import type { OnApplicationShutdown } from "@nestjs/common";
-import { CohorlyNode } from "@cohorly/node";
 import type {
   BatchEventInput,
   Callback,
+  CohorlyFlags,
   CohorlyPeople,
+  FlagCallOptions,
+  FlagResult,
   Properties,
 } from "@cohorly/node";
+import { CohorlyNode } from "@cohorly/node";
+import type { OnApplicationShutdown } from "@nestjs/common";
+import { Inject, Injectable } from "@nestjs/common";
 import { COHORLY_MODULE_OPTIONS } from "./cohorly.constants.js";
 import type { CohorlyModuleOptions } from "./interfaces.js";
 
 /**
  * Injectable wrapper around a {@link CohorlyNode} client. Delegates the
  * mixpanel-node-style API (track / people / alias / flush) and performs a
- * final flush on application shutdown (stops the auto-flush timer too).
+ * final flush on application shutdown (stops the auto-flush timer and the
+ * flag-definitions poller too).
  */
 @Injectable()
 export class CohorlyService implements OnApplicationShutdown {
@@ -31,6 +35,43 @@ export class CohorlyService implements OnApplicationShutdown {
   /** Profile operations (people.set / set_once / increment / unset / delete_user). */
   get people(): CohorlyPeople {
     return this.client.people;
+  }
+
+  /** Feature-flag evaluation (isFeatureEnabled / getFeatureFlag / ...). */
+  get flags(): CohorlyFlags {
+    return this.client.flags;
+  }
+
+  /** Whether the flag is enabled for this distinct id. False for unknown flags. */
+  isFeatureEnabled(
+    key: string,
+    distinctId: string,
+    options?: FlagCallOptions,
+  ): Promise<boolean> {
+    return this.client.flags.isFeatureEnabled(key, distinctId, options);
+  }
+
+  /** The flag's variant key when it has one, else its enabled boolean. */
+  getFeatureFlag(
+    key: string,
+    distinctId: string,
+    options?: FlagCallOptions,
+  ): Promise<boolean | string> {
+    return this.client.flags.getFeatureFlag(key, distinctId, options);
+  }
+
+  /** The matched variant's payload, or null when the flag has none / is unknown. */
+  getFeatureFlagPayload(
+    key: string,
+    distinctId: string,
+    options?: FlagCallOptions,
+  ): Promise<unknown> {
+    return this.client.flags.getFeatureFlagPayload(key, distinctId, options);
+  }
+
+  /** All flag results for this distinct id, keyed by flag key. */
+  getAllFlags(distinctId: string): Promise<Record<string, FlagResult>> {
+    return this.client.flags.getAllFlags(distinctId);
   }
 
   track(
@@ -67,7 +108,11 @@ export class CohorlyService implements OnApplicationShutdown {
     return this.client.flush(callback);
   }
 
-  /** Final flush + timer stop when the Nest application shuts down. */
+  /**
+   * Final flush when the Nest application shuts down. `shutdown()` also stops
+   * the auto-flush timer and the flag-definitions poller, so nothing keeps
+   * polling after the app is down.
+   */
   async onApplicationShutdown(): Promise<void> {
     await this.client.shutdown();
   }

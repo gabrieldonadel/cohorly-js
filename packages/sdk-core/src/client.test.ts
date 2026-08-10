@@ -99,6 +99,54 @@ describe("identify", () => {
     expect(calls).toHaveLength(1);
     expect(client.getDistinctId()).toBe("user-99");
   });
+
+  it("switches identity before the alias POST resolves, even when the transport hangs", async () => {
+    let resolveAlias: (() => void) | undefined;
+    const hangingTransport: CohorlyTransport = () =>
+      new Promise((resolve) => {
+        resolveAlias = () => resolve(undefined);
+      });
+    const { client } = makeClient({ transport: hangingTransport });
+
+    const identifyPromise = client.identify("user-42");
+    // The alias POST is still in flight (unresolved), but the switch must
+    // already be observable - that's the bug this fix closes.
+    expect(client.getDistinctId()).toBe("user-42");
+    expect(client.isAnonymous()).toBe(false);
+
+    resolveAlias?.();
+    await identifyPromise;
+  });
+
+  it("does not throw out of identify() when the alias transport rejects", async () => {
+    const rejectingTransport: CohorlyTransport = async () => {
+      throw new Error("network down");
+    };
+    const { client } = makeClient({ transport: rejectingTransport });
+
+    await expect(client.identify("user-42")).resolves.toBeUndefined();
+    // the identity switch still applies despite the rejection
+    expect(client.getDistinctId()).toBe("user-42");
+    expect(client.isAnonymous()).toBe(false);
+  });
+
+  it("posts the alias body with the old id as alias and the new id as distinct_id", async () => {
+    const { client, calls } = makeClient();
+    const anonId = client.getDistinctId();
+    await client.identify("user-42");
+
+    const aliasCall = calls.find((c) => c.url.endsWith("/alias"));
+    expect(aliasCall!.body).toEqual({ alias: anonId, distinct_id: "user-42" });
+  });
+
+  it("does not POST /alias when the previous id was already identified", async () => {
+    const { client, calls } = makeClient();
+    await client.identify("user-42"); // anonymous -> identified: aliases
+    await client.identify("user-99"); // already identified: no alias
+    expect(calls.filter((c) => c.url.endsWith("/alias"))).toHaveLength(1);
+    expect(client.getDistinctId()).toBe("user-99");
+    expect(client.isAnonymous()).toBe(false);
+  });
 });
 
 describe("reset", () => {
@@ -530,5 +578,275 @@ describe("people", () => {
     await client.people.increment({ logins: 1 });
     const engageCall = calls.find((c) => c.url.endsWith("/engage"));
     expect(engageCall!.body).toMatchObject({ $add: { logins: 1 } });
+  });
+});
+
+describe("feature flags", () => {
+  const flagsResponse = {
+    flags: {
+      checkout: {
+        enabled: true,
+        variant: null,
+        payload: null,
+        reason: "rule:0",
+      },
+      banner: {
+        enabled: true,
+        variant: "blue",
+        payload: { color: "#00f" },
+        reason: "rule:0",
+      },
+      hidden: { enabled: false, variant: null, payload: null, reason: "no_match" },
+    },
+  };
+
+  function makeFlagClient(overrides?: {
+    storage?: CohorlyStorage;
+    respond?: (body: unknown) => unknown;
+  }) {
+    const storage = overrides?.storage ?? makeStorage();
+    const calls: { url: string; body: unknown }[] = [];
+    const fetchCalls: { url: string; body: unknown }[] = [];
+    const transport: CohorlyTransport = async (url, body) => {
+      calls.push({ url, body });
+    };
+    const respond = overrides?.respond ?? (() => flagsResponse);
+    const client = new CohorlyClient({
+      apiHost: "http://localhost:4000",
+      storage,
+      transport,
+      flushIntervalMs: 0,
+      token: "tok-1",
+      fetcher: async (url, body) => {
+        fetchCalls.push({ url, body });
+        return respond(body);
+      },
+    });
+    return { client, storage, calls, fetchCalls };
+  }
+
+  it("reload posts distinct_id + token, caches to storage, and answers getters", async () => {
+    const { client, storage, fetchCalls } = makeFlagClient();
+    expect(client.getFeatureFlag("checkout")).toBe(false);
+
+    await client.reloadFeatureFlags();
+
+    expect(fetchCalls).toHaveLength(1);
+    expect(fetchCalls[0].url).toBe("http://localhost:4000/flags/evaluate");
+    expect(fetchCalls[0].body).toEqual({
+      distinct_id: client.getDistinctId(),
+      token: "tok-1",
+    });
+
+    expect(client.isFeatureEnabled("checkout")).toBe(true);
+    expect(client.getFeatureFlag("checkout")).toBe(true);
+    expect(client.getFeatureFlag("banner")).toBe("blue");
+    expect(client.getFeatureFlagPayload("banner")).toEqual({ color: "#00f" });
+    expect(client.isFeatureEnabled("hidden")).toBe(false);
+    expect(client.getFeatureFlag("nope")).toBe(false);
+    expect(client.getFeatureFlagPayload("nope")).toBeNull();
+
+    const cached = JSON.parse(storage.get("chl_flags")!);
+    expect(cached.distinct_id).toBe(client.getDistinctId());
+    expect(cached.flags.banner.variant).toBe("blue");
+  });
+
+  it("loads the persisted cache on construction for the same distinct id", async () => {
+    const storage = makeStorage();
+    const { client: c1 } = makeFlagClient({ storage });
+    await c1.reloadFeatureFlags();
+
+    const { client: c2 } = makeFlagClient({ storage });
+    expect(c2.getFeatureFlag("banner")).toBe("blue");
+    // Cached flags count as loaded: onFeatureFlags fires immediately.
+    let fired = 0;
+    c2.onFeatureFlags(() => {
+      fired += 1;
+    });
+    expect(fired).toBe(1);
+  });
+
+  it("discards a cache written for a different distinct id", () => {
+    const storage = makeStorage();
+    storage.set(
+      "chl_flags",
+      JSON.stringify({ distinct_id: "someone-else", flags: flagsResponse.flags }),
+    );
+    const { client } = makeFlagClient({ storage });
+    expect(client.getFeatureFlag("checkout")).toBe(false);
+    expect(storage.get("chl_flags")).toBeNull();
+  });
+
+  it("reloads flags on identify() and reset() with the new distinct id", async () => {
+    const { client, fetchCalls } = makeFlagClient();
+    await client.identify("user-42");
+    await vi.waitFor(() => expect(fetchCalls).toHaveLength(1));
+    expect(fetchCalls[0].body).toMatchObject({ distinct_id: "user-42" });
+
+    client.reset();
+    await vi.waitFor(() => expect(fetchCalls).toHaveLength(2));
+    expect(fetchCalls[1].body).toMatchObject({
+      distinct_id: client.getDistinctId(),
+    });
+  });
+
+  it("identify() drops the previous identity's flags even when the reload fails", async () => {
+    let fail = false;
+    const { client, storage } = makeFlagClient({
+      respond: () => (fail ? undefined : flagsResponse),
+    });
+    await client.reloadFeatureFlags();
+    expect(client.getFeatureFlag("banner")).toBe("blue");
+
+    fail = true;
+    await client.identify("user-42");
+    expect(client.getFeatureFlag("banner")).toBe(false);
+    expect(storage.get("chl_flags")).toBeNull();
+  });
+
+  it("onFeatureFlags fires after each successful reload and unsubscribes", async () => {
+    const { client } = makeFlagClient();
+    const seen: unknown[] = [];
+    const unsubscribe = client.onFeatureFlags((flags) => {
+      seen.push(flags);
+    });
+    expect(seen).toHaveLength(0); // not loaded yet: no immediate fire
+
+    await client.reloadFeatureFlags();
+    expect(seen).toHaveLength(1);
+
+    await client.reloadFeatureFlags();
+    expect(seen).toHaveLength(2);
+
+    unsubscribe();
+    await client.reloadFeatureFlags();
+    expect(seen).toHaveLength(2);
+  });
+
+  it("a failed reload keeps the stale cache and never throws", async () => {
+    let fail = false;
+    const { client, storage } = makeFlagClient({
+      respond: () => (fail ? undefined : flagsResponse),
+    });
+    await client.reloadFeatureFlags();
+    expect(client.getFeatureFlag("banner")).toBe("blue");
+
+    fail = true;
+    await expect(client.reloadFeatureFlags()).resolves.toBeUndefined();
+    expect(client.getFeatureFlag("banner")).toBe("blue");
+    expect(JSON.parse(storage.get("chl_flags")!).flags.banner.variant).toBe(
+      "blue",
+    );
+  });
+});
+
+describe("feature flag exposure events", () => {
+  const flagsResponse = {
+    flags: {
+      checkout: { enabled: true, variant: null, payload: null, reason: "rule:0" },
+      banner: {
+        enabled: true,
+        variant: "blue",
+        payload: { color: "#00f" },
+        reason: "rule:0",
+      },
+    },
+  };
+
+  function makeExposureClient(options: { sendExposureEvents?: boolean } = {}) {
+    const storage = makeStorage();
+    let flags: Record<string, unknown> = flagsResponse.flags;
+    const client = new CohorlyClient({
+      apiHost: "http://localhost:4000",
+      storage,
+      transport: async () => {},
+      flushIntervalMs: 0,
+      fetcher: async () => ({ flags }),
+      ...options,
+    });
+    const queued = () => JSON.parse(storage.get("cohorly_queue") ?? "[]");
+    const exposures = () =>
+      queued().filter(
+        (e: { event: string }) => e.event === "$feature_flag_called",
+      );
+    return {
+      client,
+      exposures,
+      setFlags: (next: Record<string, unknown>) => {
+        flags = next;
+      },
+    };
+  }
+
+  it("fires once per flag despite repeated reads, with key + response", async () => {
+    const { client, exposures } = makeExposureClient();
+    await client.reloadFeatureFlags();
+
+    client.getFeatureFlag("banner");
+    client.getFeatureFlag("banner");
+    client.isFeatureEnabled("banner");
+    client.isFeatureEnabled("checkout");
+    client.getFeatureFlag("checkout");
+
+    const fired = exposures();
+    expect(fired).toHaveLength(2);
+    expect(fired[0].properties.$feature_flag).toBe("banner");
+    expect(fired[0].properties.$feature_flag_response).toBe("blue");
+    expect(fired[1].properties.$feature_flag).toBe("checkout");
+    expect(fired[1].properties.$feature_flag_response).toBe(true);
+  });
+
+  it("refires when the flag's value changes", async () => {
+    const { client, exposures, setFlags } = makeExposureClient();
+    await client.reloadFeatureFlags();
+    client.getFeatureFlag("banner");
+    expect(exposures()).toHaveLength(1);
+
+    setFlags({
+      banner: { enabled: true, variant: "red", payload: null, reason: "rule:1" },
+    });
+    await client.reloadFeatureFlags();
+    client.getFeatureFlag("banner");
+
+    const fired = exposures();
+    expect(fired).toHaveLength(2);
+    expect(fired[1].properties.$feature_flag_response).toBe("red");
+  });
+
+  it("clears the dedup set on identify() and reset()", async () => {
+    const { client, exposures } = makeExposureClient();
+    await client.reloadFeatureFlags();
+    client.getFeatureFlag("checkout");
+    expect(exposures()).toHaveLength(1);
+
+    await client.identify("user-9");
+    await client.reloadFeatureFlags();
+    client.getFeatureFlag("checkout");
+    expect(exposures()).toHaveLength(2);
+
+    client.reset();
+    await client.reloadFeatureFlags();
+    client.getFeatureFlag("checkout");
+    expect(exposures()).toHaveLength(3);
+  });
+
+  it("sends nothing for payload reads, unknown keys, or before flags load", async () => {
+    const { client, exposures } = makeExposureClient();
+    client.getFeatureFlag("checkout"); // not loaded yet
+    expect(exposures()).toHaveLength(0);
+
+    await client.reloadFeatureFlags();
+    client.getFeatureFlagPayload("banner");
+    client.getFeatureFlag("nope");
+    client.isFeatureEnabled("nope");
+    expect(exposures()).toHaveLength(0);
+  });
+
+  it("sendExposureEvents: false silences exposures", async () => {
+    const { client, exposures } = makeExposureClient({ sendExposureEvents: false });
+    await client.reloadFeatureFlags();
+    client.getFeatureFlag("banner");
+    client.isFeatureEnabled("checkout");
+    expect(exposures()).toHaveLength(0);
   });
 });

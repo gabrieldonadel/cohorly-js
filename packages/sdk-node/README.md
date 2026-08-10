@@ -2,6 +2,8 @@
 
 Server-side Node.js SDK for [Cohorly](https://github.com/Gitarcitano/cohorly-js), hosted product analytics (Mixpanel-style). The API mirrors the official `mixpanel` npm library: stateless, `distinct_id` passed explicitly on every call, optional Node-style callbacks, plus first-class promises.
 
+**Documentation:** [Node.js SDK reference](https://cohorly-docs.velloalabs.com/sdks/node) · [Quickstart](https://cohorly-docs.velloalabs.com/quickstart) · [HTTP API](https://cohorly-docs.velloalabs.com/api/ingestion)
+
 Requires Node 18+ (global `fetch`). Zero runtime dependencies.
 
 ## Installation

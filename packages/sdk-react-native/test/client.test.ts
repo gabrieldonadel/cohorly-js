@@ -4,6 +4,7 @@ import {
   createFakeFetch,
   createProgrammableFetch,
   FakeStorage,
+  requestsTo,
 } from "./helpers.js";
 
 describe("track payload shape", () => {
@@ -168,6 +169,117 @@ describe("identify persistence", () => {
   });
 });
 
+describe("identify() aliasing", () => {
+  it("posts /alias linking the previous anonymous id to the new one", async () => {
+    const { fetchImpl, requests } = createFakeFetch();
+    const client = new CohorlyClient({
+      apiHost: "http://localhost:4000",
+      token: "proj_abc123",
+      storage: new FakeStorage(),
+      fetch: fetchImpl,
+    });
+    await client.ready;
+    const anonId = client.getDistinctId();
+    client.identify("user-42");
+    await vi.waitFor(() => expect(requestsTo(requests, "/alias")).toHaveLength(1));
+    client.stop();
+
+    expect(requestsTo(requests, "/alias")[0].body).toEqual({
+      alias: anonId,
+      distinct_id: "user-42",
+      token: "proj_abc123",
+    });
+  });
+
+  it("does not alias when the previous id was already identified", async () => {
+    const { fetchImpl, requests } = createFakeFetch();
+    const client = new CohorlyClient({
+      apiHost: "http://localhost:4000",
+      storage: new FakeStorage(),
+      fetch: fetchImpl,
+    });
+    await client.ready;
+    client.identify("user-1");
+    await vi.waitFor(() => expect(requestsTo(requests, "/alias")).toHaveLength(1));
+    client.identify("user-2");
+    client.stop();
+
+    expect(requestsTo(requests, "/alias")).toHaveLength(1);
+    expect(client.getDistinctId()).toBe("user-2");
+  });
+
+  it("is a no-op when the id is unchanged", async () => {
+    const { fetchImpl, requests } = createFakeFetch();
+    const client = new CohorlyClient({
+      apiHost: "http://localhost:4000",
+      storage: new FakeStorage(),
+      fetch: fetchImpl,
+    });
+    await client.ready;
+    const anonId = client.getDistinctId();
+    client.identify(anonId);
+    client.stop();
+
+    expect(requests).toHaveLength(0);
+    // Still anonymous: identify() with the current id is not a backdoor for
+    // flipping the anonymous flag (which would suppress $user_id forever).
+    expect(client.getDistinctId()).toBe(anonId);
+  });
+
+  it("aliases the post-reset anonymous id, not the pre-reset one", async () => {
+    const { fetchImpl, requests } = createFakeFetch();
+    const client = new CohorlyClient({
+      apiHost: "http://localhost:4000",
+      storage: new FakeStorage(),
+      fetch: fetchImpl,
+    });
+    await client.ready;
+    client.identify("user-1");
+    await vi.waitFor(() => expect(requestsTo(requests, "/alias")).toHaveLength(1));
+    client.reset();
+    const newAnonId = client.getDistinctId();
+    client.identify("user-2");
+    await vi.waitFor(() => expect(requestsTo(requests, "/alias")).toHaveLength(2));
+    client.stop();
+
+    expect((requestsTo(requests, "/alias")[1].body as any).alias).toBe(newAnonId);
+  });
+
+  it("sends nothing when the client is disabled", async () => {
+    const { fetchImpl, requests } = createFakeFetch();
+    const client = new CohorlyClient({
+      apiHost: "http://localhost:4000",
+      storage: new FakeStorage(),
+      fetch: fetchImpl,
+      disabled: true,
+    });
+    await client.ready;
+    client.identify("user-7");
+    await client.flush();
+    client.stop();
+
+    expect(requests).toHaveLength(0);
+    expect(client.getDistinctId()).toBe("user-7");
+  });
+
+  it("swallows an /alias failure and keeps the identity switch", async () => {
+    const { fetchImpl, requests } = createFakeFetch({ fail: true });
+    const client = new CohorlyClient({
+      apiHost: "http://localhost:4000",
+      storage: new FakeStorage(),
+      fetch: fetchImpl,
+    });
+    await client.ready;
+    client.identify("user-99");
+    expect(client.getDistinctId()).toBe("user-99");
+    await vi.waitFor(() => expect(requestsTo(requests, "/alias")).toHaveLength(1));
+    client.stop();
+
+    // Never retried: still the single attempt.
+    expect(requestsTo(requests, "/alias")).toHaveLength(1);
+  });
+});
+
 describe("$device_id / $user_id stamping", () => {
   it("stamps $device_id on every event and it survives identify()", async () => {
     const { fetchImpl, requests } = createFakeFetch();
@@ -187,7 +299,7 @@ describe("$device_id / $user_id stamping", () => {
     await client.flush();
     client.stop();
 
-    const events = requests[0].body as any[];
+    const events = requestsTo(requests, "/track")[0].body as any[];
     expect(events[0].properties.$device_id).toBe(deviceId);
     expect(events[1].properties.$device_id).toBe(deviceId);
     // Device id is preserved across identify().
@@ -209,7 +321,7 @@ describe("$device_id / $user_id stamping", () => {
     await client.flush();
     client.stop();
 
-    const events = requests[0].body as any[];
+    const events = requestsTo(requests, "/track")[0].body as any[];
     expect(events[0].properties.$user_id).toBeUndefined();
     expect(events[1].properties.$user_id).toBe("user-42");
     expect(events[1].properties.distinct_id).toBe("user-42");
@@ -229,7 +341,7 @@ describe("$device_id / $user_id stamping", () => {
     await client.flush();
     client.stop();
 
-    const [event] = requests[0].body as any[];
+    const [event] = requestsTo(requests, "/track")[0].body as any[];
     expect(event.properties.$device_id).toBe("my-device");
     expect(event.properties.$user_id).toBe("my-user");
   });
@@ -503,9 +615,9 @@ describe("people (engage) queue", () => {
     await client.flush();
     client.stop();
 
-    expect(requests).toHaveLength(1);
-    expect(requests[0].path).toBe("/engage");
-    const [payload] = requests[0].body as any[];
+    const engage = requestsTo(requests, "/engage");
+    expect(engage).toHaveLength(1);
+    const [payload] = engage[0].body as any[];
     expect(payload.distinct_id).toBe("user-9");
     expect(payload.$set).toEqual({ plan: "pro" });
   });

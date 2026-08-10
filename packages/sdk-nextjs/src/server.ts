@@ -35,12 +35,17 @@ export interface CohorlyProxyOptions {
    * point at a different deployment.
    */
   apiHost?: string;
-  /** Upstream paths allowed to be forwarded. Defaults to track/engage/alias. */
+  /**
+   * Upstream paths allowed to be forwarded. Defaults to
+   * track/engage/alias/flags/evaluate. Multi-segment paths (like
+   * `flags/evaluate`) are matched on their full slash-joined form.
+   */
   allowedPaths?: string[];
   /**
    * Project token injected server-side into every forwarded /track event's
-   * properties and every /engage or /alias body. Use this to keep the token
-   * out of client bundles instead of passing it to the client SDK's `init`.
+   * properties and every /engage, /alias or /flags/evaluate body. Use this to
+   * keep the token out of client bundles instead of passing it to the client
+   * SDK's `init`.
    */
   token?: string;
 }
@@ -57,14 +62,18 @@ const DEFAULT_API_HOST = "https://cohorly-service.velloalabs.com";
 
 export function createCohorlyProxy(options: CohorlyProxyOptions = {}): CohorlyProxyHandlers {
   const apiHost = (options.apiHost ?? DEFAULT_API_HOST).replace(/\/$/, "");
-  const allowed = new Set(options.allowedPaths ?? ["track", "engage", "alias"]);
+  const allowed = new Set(
+    options.allowedPaths ?? ["track", "engage", "alias", "flags/evaluate"],
+  );
 
   async function POST(request: Request, context?: RouteContext): Promise<Response> {
     const resolvedParams = context?.params ? await context.params : undefined;
     const segments = resolvedParams?.path ?? segmentsFromUrl(request.url);
-    const target = segments[segments.length - 1];
+    // Prefer the longest trailing match, so a two-segment upstream path like
+    // `flags/evaluate` wins over the bare last segment (`evaluate`).
+    const target = resolveTarget(segments, allowed);
 
-    if (!target || !allowed.has(target)) {
+    if (!target) {
       return new Response(JSON.stringify({ error: "unknown cohorly proxy path" }), {
         status: 404,
         headers: { "content-type": "application/json" },
@@ -99,6 +108,20 @@ export function createCohorlyProxy(options: CohorlyProxyOptions = {}): CohorlyPr
   }
 
   return { POST };
+}
+
+/**
+ * Resolves the upstream path from the route's trailing segments, matching the
+ * longest allowed suffix first (max 2 segments, enough for `flags/evaluate`).
+ * Returns undefined when nothing matches.
+ */
+function resolveTarget(segments: string[], allowed: Set<string>): string | undefined {
+  for (const depth of [2, 1]) {
+    if (segments.length < depth) continue;
+    const candidate = segments.slice(segments.length - depth).join("/");
+    if (allowed.has(candidate)) return candidate;
+  }
+  return undefined;
 }
 
 function segmentsFromUrl(url: string): string[] {

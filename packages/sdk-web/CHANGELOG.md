@@ -1,5 +1,16 @@
 # @cohorly/web
 
+## 0.3.0
+
+### Minor Changes
+
+- Feature flags: remote evaluation on every SDK (`isFeatureEnabled`, `getFeatureFlag`, `getFeatureFlagPayload`, `getAllFlags`, `reloadFeatureFlags`, `onFeatureFlags`), identity-scoped persisted flag cache on client SDKs (reloaded on init/identify/reset), local evaluation for server SDKs (`@cohorly/node` and `@cohorly/nest` via a flag secret and polled definitions, ADR-0011), and `$feature_flag_called` exposure events (deduped per identity session on client SDKs via `sendExposureEvents`, per-call opt-in on server SDKs).
+
+### Patch Changes
+
+- Updated dependencies
+  - @cohorly/core@0.3.0
+
 ## 0.2.3
 
 ### Patch Changes

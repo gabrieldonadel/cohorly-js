@@ -1,12 +1,23 @@
+import { FlagDefinitionsPoller } from "./definitions.js";
+import { createFlags } from "./flags.js";
+import { evaluateFlagLocally } from "./local-eval.js";
 import { createPeople } from "./people.js";
-import { fetchTransport, TransportError } from "./transport.js";
+import {
+  fetchDefinitionsFetcher,
+  fetchJsonFetcher,
+  fetchTransport,
+  TransportError,
+} from "./transport.js";
 import type {
   BatchEventInput,
   Callback,
   CohorlyConfig,
+  CohorlyFetcher,
+  CohorlyFlags,
   CohorlyPeople,
   CohorlyTransport,
   EngagePayload,
+  FlagResult,
   Properties,
   TrackEvent,
 } from "./types.js";
@@ -18,6 +29,9 @@ const DEFAULT_FLUSH_INTERVAL_MS = 5000;
 const DEFAULT_BATCH_SIZE = 20;
 const DEFAULT_MAX_QUEUE_SIZE = 1000;
 const DEFAULT_MAX_RETRY_DELAY_MS = 10 * 60 * 1000; // 10 minutes
+const DEFAULT_FLAG_POLL_INTERVAL_MS = 30000;
+/** Exposure event name, matching the other Cohorly SDKs. */
+const EXPOSURE_EVENT = "$feature_flag_called";
 const BACKOFF_BASE_MS = 2000;
 /** Server-side hard cap on events per /track request (400 above it). */
 export const SERVER_MAX_BATCH = 500;
@@ -42,6 +56,7 @@ function nodeify(promise: Promise<void>, callback?: Callback): Promise<void> {
  */
 export class CohorlyNode {
   readonly people: CohorlyPeople;
+  readonly flags: CohorlyFlags;
 
   private readonly token: string;
   private readonly host: string;
@@ -51,6 +66,9 @@ export class CohorlyNode {
   private readonly maxQueueSize: number;
   private readonly maxRetryDelayMs: number;
   private readonly transport: CohorlyTransport;
+  private readonly fetcher: CohorlyFetcher;
+  /** Definitions poller, only when a flagSecret was configured (ADR-0011). */
+  private readonly definitions: FlagDefinitionsPoller | undefined;
 
   private queue: TrackEvent[] = [];
   private flushTimer: ReturnType<typeof setInterval> | undefined;
@@ -79,10 +97,25 @@ export class CohorlyNode {
     this.maxQueueSize = config.maxQueueSize ?? DEFAULT_MAX_QUEUE_SIZE;
     this.maxRetryDelayMs = config.maxRetryDelayMs ?? DEFAULT_MAX_RETRY_DELAY_MS;
     this.transport = config.transport ?? fetchTransport;
+    this.fetcher = config.fetcher ?? fetchJsonFetcher;
     this.effectiveBatchSize = this.batchSize;
 
     this.people = createPeople((payload, callback) =>
       this.sendEngage(payload, callback),
+    );
+    if (config.flagSecret) {
+      this.definitions = new FlagDefinitionsPoller({
+        url: `${this.host}/flags/local-evaluation`,
+        secret: config.flagSecret,
+        intervalMs: config.flagPollIntervalMs ?? DEFAULT_FLAG_POLL_INTERVAL_MS,
+        fetcher: config.definitionsFetcher ?? fetchDefinitionsFetcher,
+        log: (...args) => this.log(...args),
+      });
+    }
+
+    this.flags = createFlags(
+      (distinctId, flagKeys) => this.resolveFlags(distinctId, flagKeys),
+      (distinctId, key, response) => this.trackExposure(distinctId, key, response),
     );
 
     if (this.flushIntervalMs > 0) {
@@ -183,7 +216,8 @@ export class CohorlyNode {
   }
 
   /**
-   * Stop the auto-flush timer and attempt a final flush. Never rejects -
+   * Stop the auto-flush timer and the flag-definitions poller, and attempt a
+   * final flush. Never rejects -
    * a failed final flush is logged (debug) and remaining events are dropped
    * with the process. Call this on graceful shutdown.
    */
@@ -192,11 +226,21 @@ export class CohorlyNode {
       clearInterval(this.flushTimer);
       this.flushTimer = undefined;
     }
+    this.definitions?.stop();
     try {
       await this.enqueueFlush(true);
     } catch (err) {
       this.log("final flush on shutdown failed", err);
     }
+  }
+
+  /**
+   * Resolves once the first flag-definitions fetch has settled (successfully
+   * or not). Resolves immediately when no `flagSecret` is configured. Useful
+   * at boot to avoid the first few reads falling back to the network.
+   */
+  get flagDefinitionsReady(): Promise<void> {
+    return this.definitions?.ready ?? Promise.resolve();
   }
 
   /** Number of events currently queued (mainly for tests/monitoring). */
@@ -367,6 +411,99 @@ export class CohorlyNode {
       }),
       callback,
     );
+  }
+
+  /**
+   * Resolve flags for a distinct id, preferring local evaluation (ADR-0011).
+   *
+   * With definitions loaded, every flag that is present and `localEvaluable`
+   * is computed in-process with no network at all. Everything else - no flag
+   * secret, definitions not fetched yet, unknown key, or a cohort-targeted
+   * flag - goes down the unchanged /flags/evaluate path.
+   *
+   * `getAllFlags` (no `flagKeys`) tolerates a failed remote leg: the local
+   * results still return and the non-local keys are simply absent. They are
+   * never computed locally - a cohort rule must not silently fail to match.
+   * Explicit-key calls keep the old semantics and surface the error.
+   */
+  private async resolveFlags(
+    distinctId: string,
+    flagKeys?: string[],
+  ): Promise<Record<string, FlagResult>> {
+    const defs = this.definitions?.get();
+    if (!defs) return this.evaluateFlags(distinctId, flagKeys);
+    if (!distinctId || typeof distinctId !== "string") {
+      throw new TypeError("cohorly: distinct_id is required to evaluate flags");
+    }
+
+    const out: Record<string, FlagResult> = {};
+    const remoteKeys: string[] = [];
+    const keys = flagKeys ?? defs.map((d) => d.key);
+    for (const key of keys) {
+      const def = defs.find((d) => d.key === key);
+      if (def?.localEvaluable) out[key] = evaluateFlagLocally(def, distinctId);
+      else remoteKeys.push(key);
+    }
+
+    if (remoteKeys.length > 0) {
+      if (flagKeys) {
+        Object.assign(out, await this.evaluateFlags(distinctId, remoteKeys));
+      } else {
+        try {
+          Object.assign(out, await this.evaluateFlags(distinctId, remoteKeys));
+        } catch (err) {
+          this.log("remote leg of getAllFlags failed, omitting those keys", err);
+        }
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Queue the opt-in `$feature_flag_called` exposure event. Fire-and-forget:
+   * a flag read must never fail because its exposure event could not queue.
+   */
+  private trackExposure(
+    distinctId: string,
+    key: string,
+    response: boolean | string,
+  ): void {
+    try {
+      this.enqueue([
+        this.buildEvent(EXPOSURE_EVENT, {
+          distinct_id: distinctId,
+          $feature_flag: key,
+          $feature_flag_response: response,
+        }),
+      ]);
+    } catch (err) {
+      this.log("could not queue exposure event", err);
+    }
+  }
+
+  /**
+   * Evaluate feature flags for a distinct id via POST /flags/evaluate (sent
+   * immediately, not queued). Failures surface to the caller like /engage
+   * ops - they are NOT retried.
+   */
+  private async evaluateFlags(
+    distinctId: string,
+    flagKeys?: string[],
+  ): Promise<Record<string, FlagResult>> {
+    if (!distinctId || typeof distinctId !== "string") {
+      throw new TypeError("cohorly: distinct_id is required to evaluate flags");
+    }
+    const res = await this.fetcher(
+      `${this.host}/flags/evaluate`,
+      {
+        distinct_id: distinctId,
+        ...(flagKeys !== undefined ? { flag_keys: flagKeys } : {}),
+      },
+      this.headers(),
+    );
+    const flags = (res as { flags?: unknown } | null | undefined)?.flags;
+    if (!flags || typeof flags !== "object") return {};
+    return flags as Record<string, FlagResult>;
   }
 
   private headers(): Record<string, string> {

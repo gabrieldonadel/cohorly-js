@@ -2,6 +2,8 @@
 
 NestJS integration for [Cohorly](https://github.com/Gitarcitano/cohorly-js), hosted product analytics (Mixpanel-style). A standard dynamic module (`forRoot` / `forRootAsync`) plus an injectable `CohorlyService` wrapping [`@cohorly/node`](../sdk-node), with an automatic final flush on application shutdown.
 
+**Documentation:** [NestJS SDK reference](https://cohorly-docs.velloalabs.com/sdks/nest) · [Quickstart](https://cohorly-docs.velloalabs.com/quickstart) · [HTTP API](https://cohorly-docs.velloalabs.com/api/ingestion)
+
 Supports `@nestjs/common` ^10 and ^11 (peer dependency). Requires Node 18+.
 
 ## Installation

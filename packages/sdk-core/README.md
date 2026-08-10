@@ -5,6 +5,8 @@ analytics). Handles the event queue, batching, flush scheduling, identity, and s
 properties. Storage and network transport are injected by platform SDKs, so this package
 has zero DOM/Node/React Native dependencies and can be used to build a new platform SDK.
 
+**Documentation:** [Core SDK reference](https://cohorly-docs.velloalabs.com/sdks/core) · [Quickstart](https://cohorly-docs.velloalabs.com/quickstart) · [HTTP API](https://cohorly-docs.velloalabs.com/api/ingestion)
+
 Most apps should use a platform package instead of this one directly:
 `@cohorly/web`, `@cohorly/react`, `@cohorly/nextjs`, `@cohorly/react-native`, or the iOS
 `CohorlySwift` package.

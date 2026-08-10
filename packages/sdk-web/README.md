@@ -4,6 +4,8 @@ Browser SDK for Cohorly (hosted, Mixpanel-style product analytics). Built on
 `@cohorly/core` with localStorage persistence, `fetch`/`sendBeacon` transport (so events
 survive tab close/navigation), and optional SPA pageview autotracking.
 
+**Documentation:** [Web SDK reference](https://cohorly-docs.velloalabs.com/sdks/web) · [Quickstart](https://cohorly-docs.velloalabs.com/quickstart) · [HTTP API](https://cohorly-docs.velloalabs.com/api/ingestion)
+
 ## Install
 
 ```bash

@@ -1,4 +1,8 @@
-import type { CohorlyTransport } from "./types.js";
+import type {
+  CohorlyFetcher,
+  CohorlyGetFetcher,
+  CohorlyTransport,
+} from "./types.js";
 
 /**
  * Error thrown by transports on a non-OK HTTP response. Carries the HTTP
@@ -56,4 +60,42 @@ export const fetchTransport: CohorlyTransport = async (url, body, headers) => {
       `cohorly: request to ${url} failed with status ${res.status}`,
     );
   }
+};
+
+/**
+ * Default GET fetcher (flag definitions): GET the URL with `headers` (the flag
+ * secret rides in Authorization) and resolve the parsed body. Throws a
+ * {@link TransportError} on a non-2xx response.
+ */
+export const fetchDefinitionsFetcher: CohorlyGetFetcher = async (url, headers) => {
+  const res = await fetch(url, { method: "GET", headers });
+  if (!res.ok) {
+    throw new TransportError(
+      res.status,
+      parseRetryAfterMs(res.headers.get("retry-after")),
+      `cohorly: request to ${url} failed with status ${res.status}`,
+    );
+  }
+  return await res.json();
+};
+
+/**
+ * Default JSON fetcher (flags): POST JSON via the global fetch and resolve the
+ * parsed response body. Throws a {@link TransportError} on a non-2xx response;
+ * network failures reject with the underlying fetch error.
+ */
+export const fetchJsonFetcher: CohorlyFetcher = async (url, body, headers) => {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...headers },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new TransportError(
+      res.status,
+      parseRetryAfterMs(res.headers.get("retry-after")),
+      `cohorly: request to ${url} failed with status ${res.status}`,
+    );
+  }
+  return await res.json();
 };

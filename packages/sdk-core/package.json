@@ -1,6 +1,6 @@
 {
   "name": "@cohorly/core",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Transport-agnostic core client for Cohorly, hosted product analytics (Mixpanel-style). Queueing, batching, flush, identity, and super properties, with storage and transport injected by platform SDKs.",
   "type": "module",
   "main": "dist/index.js",

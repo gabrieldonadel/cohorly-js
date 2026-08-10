@@ -1,4 +1,4 @@
-import type { PeopleProperties } from "@cohorly/core";
+import type { FlagResult, PeopleProperties } from "@cohorly/core";
 import { CohorlyClient, fetchTransport } from "@cohorly/core";
 import { getAttributionProperties, initAttribution } from "./attribution.js";
 import type { AutocaptureConfig, AutocaptureOption } from "./autocapture.js";
@@ -38,6 +38,18 @@ export interface CohorlyWebOptions {
    * to the right project.
    */
   token?: string;
+  /**
+   * Load feature flags on init (POST /flags/evaluate for the current
+   * distinct id). Default true; pass false to opt out and call
+   * `reloadFeatureFlags()` yourself.
+   */
+  loadFeatureFlags?: boolean;
+  /**
+   * Track a `$feature_flag_called` event the first time each flag key/value is
+   * read via `getFeatureFlag()`/`isFeatureEnabled()`. Deduped per identity
+   * session (cleared on identify()/reset()). Default true.
+   */
+  sendExposureEvents?: boolean;
   /** Max events retained in the persisted queue (drop oldest on overflow). Default 1000. */
   maxQueueSize?: number;
   /** Upper bound on retry backoff delay, in ms. Default 600000 (10 min). */
@@ -60,6 +72,17 @@ export interface Cohorly {
   flush(): Promise<void>;
   getDistinctId(): string;
   isAnonymous(): boolean;
+  /** Re-evaluate feature flags for the current distinct id. Never rejects. */
+  reloadFeatureFlags(): Promise<void>;
+  /** Variant key if the flag has one, else its enabled boolean; false when unknown/not loaded. */
+  getFeatureFlag(key: string): boolean | string;
+  isFeatureEnabled(key: string): boolean;
+  getFeatureFlagPayload(key: string): unknown | null;
+  /**
+   * Subscribe to flag updates. Fires after every successful reload, and
+   * immediately if flags are already loaded. Returns an unsubscribe function.
+   */
+  onFeatureFlags(cb: (flags: Record<string, FlagResult>) => void): () => void;
 }
 
 /**
@@ -140,6 +163,21 @@ export const cohorly: Cohorly = {
   isAnonymous() {
     return ensureClient().isAnonymous();
   },
+  reloadFeatureFlags() {
+    return ensureClient().reloadFeatureFlags();
+  },
+  getFeatureFlag(key) {
+    return ensureClient().getFeatureFlag(key);
+  },
+  isFeatureEnabled(key) {
+    return ensureClient().isFeatureEnabled(key);
+  },
+  getFeatureFlagPayload(key) {
+    return ensureClient().getFeatureFlagPayload(key);
+  },
+  onFeatureFlags(cb) {
+    return ensureClient().onFeatureFlags(cb);
+  },
 };
 
 function setupUnloadFlush(client: CohorlyClient): void {
@@ -168,6 +206,7 @@ export function init(options: CohorlyWebOptions): Cohorly {
     token: options.token,
     maxQueueSize: options.maxQueueSize,
     maxRetryDelayMs: options.maxRetryDelayMs,
+    sendExposureEvents: options.sendExposureEvents,
   });
 
   if (options.superProperties) {
@@ -200,6 +239,12 @@ export function init(options: CohorlyWebOptions): Cohorly {
     });
   }
 
+  // Feature flags: kick off the first evaluation (default on). Fire and
+  // forget - reloadFeatureFlags never rejects.
+  if (options.loadFeatureFlags !== false) {
+    void activeClient.reloadFeatureFlags();
+  }
+
   return cohorly;
 }
 
@@ -208,6 +253,8 @@ export type {
   CohorlyStorage,
   CohorlyTransport,
   EngageOp,
+  FlagResult,
+  FlagsFetcher,
   PeopleProperties,
   TrackedEvent,
 } from "@cohorly/core";

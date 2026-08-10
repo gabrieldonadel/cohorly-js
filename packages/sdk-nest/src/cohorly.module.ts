@@ -1,5 +1,5 @@
-import { Module } from "@nestjs/common";
 import type { DynamicModule } from "@nestjs/common";
+import { Module } from "@nestjs/common";
 import { COHORLY_MODULE_OPTIONS } from "./cohorly.constants.js";
 import { CohorlyService } from "./cohorly.service.js";
 import type {

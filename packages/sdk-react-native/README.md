@@ -4,6 +4,8 @@ Standalone React Native client for Cohorly (hosted, Mixpanel-style product analy
 dependency on `react-native` or any storage library - it works out of the box with an in-memory
 store, and upgrades to persistent storage when you inject one.
 
+**Documentation:** [React Native SDK reference](https://cohorly-docs.velloalabs.com/sdks/react-native) · [Quickstart](https://cohorly-docs.velloalabs.com/quickstart) · [HTTP API](https://cohorly-docs.velloalabs.com/api/ingestion)
+
 ## Install
 
 ```bash

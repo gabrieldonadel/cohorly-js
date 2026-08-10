@@ -4,4 +4,4 @@
  * and bundler-friendly. Synced with package.json "version" at release time
  * by scripts/sync-versions.mjs.
  */
-export const VERSION = "0.2.3";
+export const VERSION = "0.3.0";

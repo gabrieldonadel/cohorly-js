@@ -4,6 +4,8 @@ Next.js integration for Cohorly (hosted, Mixpanel-style product analytics).
 Re-exports `@cohorly/react`'s `<CohorlyProvider>` / `useCohorly()`, plus
 `createCohorlyProxy()` for a first-party ingestion route handler.
 
+**Documentation:** [Next.js SDK reference](https://cohorly-docs.velloalabs.com/sdks/nextjs) · [Quickstart](https://cohorly-docs.velloalabs.com/quickstart) · [HTTP API](https://cohorly-docs.velloalabs.com/api/ingestion)
+
 ## Install
 
 ```bash

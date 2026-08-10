@@ -12,6 +12,7 @@ import type {
   AsyncStorageLike,
   CohorlyOptions,
   EngagePayload,
+  FlagResult,
   PlatformInfo,
   Properties,
   TrackEvent,
@@ -28,7 +29,17 @@ const KEYS = {
   engageQueue: "cohorly:engage_queue",
   aeFirstOpen: "cohorly:ae_first_open",
   aeLastVersion: "cohorly:ae_last_version",
+  flags: "cohorly:flags",
 } as const;
+
+/**
+ * Persisted flag cache. Scoped by distinct id so a cache written for one user
+ * is never served to another after an identify()/reset() on the same device.
+ */
+interface FlagsCache {
+  distinct_id: string;
+  flags: Record<string, FlagResult>;
+}
 
 const DEFAULT_FLUSH_INTERVAL = 5000;
 const DEFAULT_FLUSH_AT = 20;
@@ -131,6 +142,23 @@ export class CohorlyClient {
   /** Timestamp (ms) the app most recently became active/foregrounded. */
   private sessionStartedAt = Date.now();
 
+  /** Last known flag results for the current distinct id (memory copy of the
+   * persisted cache). */
+  private flags: Record<string, FlagResult> = {};
+  /** True once flags were loaded (from cache or a successful reload). */
+  private flagsLoaded = false;
+  /** Monotonic request counter, guards against a stale reload overwriting a
+   * newer one that resolved first. */
+  private flagRequestSeq = 0;
+  private readonly flagListeners = new Set<
+    (flags: Record<string, FlagResult>) => void
+  >();
+  /** Whether flag reads emit `$feature_flag_called` exposure events. */
+  private readonly sendExposureEvents: boolean;
+  /** Exposures already tracked this identity session, keyed
+   * `${key}:${String(value)}`. In memory only, cleared on identify()/reset(). */
+  private readonly exposedFlags = new Set<string>();
+
   /** Resolves once persisted state (distinct id, super props, queued events)
    * has been loaded from storage. Tests can await this for determinism. */
   readonly ready: Promise<void>;
@@ -148,6 +176,7 @@ export class CohorlyClient {
     this.maxQueueSize = options.maxQueueSize ?? DEFAULT_MAX_QUEUE_SIZE;
     this.maxRetryDelayMs = options.maxRetryDelayMs ?? DEFAULT_MAX_RETRY_DELAY_MS;
     this.trackAutomaticEvents = options.trackAutomaticEvents ?? false;
+    this.sendExposureEvents = options.sendExposureEvents ?? true;
     this.effectiveBatchSize = this.flushAt;
     this.distinctId = uuid();
     // Transient until hydrate() resolves the persisted/derived value.
@@ -178,7 +207,15 @@ export class CohorlyClient {
       if (this.platformInfo.wifi !== undefined) this.wifi = this.platformInfo.wifi;
     });
 
-    this.ready = Promise.all([this.hydrate(), nativeReady]).then(() => undefined);
+    // Feature flags: the first evaluation is deferred until hydration has
+    // resolved the persisted distinct id, so it is never evaluated for the
+    // transient constructor uuid. Fire and forget - reloadFeatureFlags()
+    // never rejects. `ready` deliberately does NOT await it: callers must be
+    // able to track immediately, offline, without waiting on a flags request.
+    const loadFlags = options.loadFeatureFlags !== false;
+    this.ready = Promise.all([this.hydrate(), nativeReady]).then(() => {
+      if (loadFlags) void this.reloadFeatureFlags();
+    });
     this.startTimer();
     watchAppState(this.appStateModule, (state) => this.handleAppStateChange(state));
   }
@@ -288,15 +325,23 @@ export class CohorlyClient {
   }
 
   private async hydrate(): Promise<void> {
-    const [storedId, storedAnon, storedDevice, storedSuper, storedQueue, storedEngageQueue] =
-      await Promise.all([
-        this.storage.getItem(KEYS.distinctId),
-        this.storage.getItem(KEYS.anonymous),
-        this.storage.getItem(KEYS.deviceId),
-        this.storage.getItem(KEYS.superProps),
-        this.storage.getItem(KEYS.queue),
-        this.storage.getItem(KEYS.engageQueue),
-      ]);
+    const [
+      storedId,
+      storedAnon,
+      storedDevice,
+      storedSuper,
+      storedQueue,
+      storedEngageQueue,
+      storedFlags,
+    ] = await Promise.all([
+      this.storage.getItem(KEYS.distinctId),
+      this.storage.getItem(KEYS.anonymous),
+      this.storage.getItem(KEYS.deviceId),
+      this.storage.getItem(KEYS.superProps),
+      this.storage.getItem(KEYS.queue),
+      this.storage.getItem(KEYS.engageQueue),
+      this.storage.getItem(KEYS.flags),
+    ]);
 
     if (storedId) {
       this.distinctId = storedId;
@@ -341,6 +386,24 @@ export class CohorlyClient {
         this.engageQueue = JSON.parse(storedEngageQueue);
       } catch {
         this.engageQueue = [];
+      }
+    }
+
+    // Flags are per-identity: only adopt the persisted cache when it belongs
+    // to the distinct id resolved above, else drop it.
+    if (storedFlags) {
+      let cache: FlagsCache | null = null;
+      try {
+        cache = JSON.parse(storedFlags) as FlagsCache;
+      } catch {
+        cache = null;
+      }
+      if (cache && cache.distinct_id === this.distinctId) {
+        this.flags = cache.flags ?? {};
+        this.flagsLoaded = true;
+        this.emitFlags();
+      } else {
+        void this.storage.removeItem(KEYS.flags);
       }
     }
 
@@ -452,11 +515,41 @@ export class CohorlyClient {
     }
   }
 
+  /**
+   * Switches identity to `distinctId`. No-op when it already is the current
+   * id. The switch is applied synchronously, before any network call.
+   *
+   * When the previous id was still anonymous, this also links the two by
+   * POSTing `/alias`, so the server folds pre-login history into the same
+   * person. Best effort: it is fired without awaiting and a failure is
+   * swallowed, because the server also links `$device_id` to `$user_id`
+   * implicitly from the next event that carries both (which every event
+   * from an identified user does), so a dropped call delays the link
+   * rather than losing it. Mirrors @cohorly/core and the iOS SDK.
+   */
   identify(distinctId: string): void {
+    if (distinctId === this.distinctId) return;
+    const previousId = this.distinctId;
+    const wasAnonymous = this.anonymous;
     this.distinctId = distinctId;
     this.anonymous = false;
     void this.storage.setItem(KEYS.distinctId, distinctId);
     void this.storage.setItem(KEYS.anonymous, "0");
+    // Flags are per-identity: refresh them for the new id (fire and forget),
+    // and let the new identity record its own exposures.
+    this.exposedFlags.clear();
+    void this.reloadFeatureFlags();
+    // `disabled` is enforced in doFlush() for the queued paths; this post
+    // does not go through the queue, so it has to check for itself.
+    if (!wasAnonymous || this.disabled) return;
+    void this.send("/alias", {
+      alias: previousId,
+      distinct_id: distinctId,
+      ...(this.token !== undefined ? { token: this.token } : {}),
+    }).catch(() => {
+      // Best effort, like the other client SDKs: an alias failure is not
+      // retried and never surfaces to the caller.
+    });
   }
 
   /** Clears identity, super properties, queued-but-unsent events, and any
@@ -477,6 +570,125 @@ export class CohorlyClient {
     this.persistSuperProps();
     this.persistQueue();
     this.persistEngageQueue();
+    // Flags are per-identity: the previous identity's flags must not be served
+    // to the new anonymous id, so drop them before the refresh.
+    this.flags = {};
+    this.flagsLoaded = false;
+    this.exposedFlags.clear();
+    void this.storage.removeItem(KEYS.flags);
+    void this.reloadFeatureFlags();
+  }
+
+  /**
+   * Re-evaluate feature flags for the current distinct id via
+   * POST /flags/evaluate, caching the result in memory and storage (key
+   * `cohorly:flags`, scoped by distinct id). Never rejects: on any error
+   * (network, non-2xx, bad JSON) the stale cache is kept.
+   */
+  async reloadFeatureFlags(): Promise<void> {
+    if (this.disabled || !this.fetchImpl) return;
+    const requestedId = this.distinctId;
+    const seq = ++this.flagRequestSeq;
+
+    let parsed: unknown;
+    try {
+      const res = await this.fetchImpl(`${this.apiHost}/flags/evaluate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          distinct_id: requestedId,
+          ...(this.token !== undefined ? { token: this.token } : {}),
+        }),
+      });
+      if (!res.ok) return;
+      parsed = await res.json();
+    } catch {
+      // Swallowed by contract: a failed reload keeps the stale flag cache.
+      return;
+    }
+
+    // Identity changed, or a newer reload started, while this request was in
+    // flight: these results are stale, discard them.
+    if (requestedId !== this.distinctId || seq !== this.flagRequestSeq) return;
+    const flags = (parsed as { flags?: unknown } | null | undefined)?.flags;
+    if (!flags || typeof flags !== "object") return;
+
+    this.flags = flags as Record<string, FlagResult>;
+    this.flagsLoaded = true;
+    void this.storage.setItem(
+      KEYS.flags,
+      JSON.stringify({ distinct_id: requestedId, flags: this.flags } satisfies FlagsCache),
+    );
+    this.emitFlags();
+  }
+
+  /** Notifies every onFeatureFlags listener; a throwing listener never breaks
+   * the others (or the reload). */
+  private emitFlags(): void {
+    for (const cb of this.flagListeners) {
+      try {
+        cb(this.flags);
+      } catch {
+        // Listener errors are the listener's problem, not the SDK's.
+      }
+    }
+  }
+
+  /**
+   * The flag's variant key when it has one, else its enabled boolean.
+   * `false` for unknown flags or before flags are loaded.
+   */
+  getFeatureFlag(key: string): boolean | string {
+    const flag = this.flags[key];
+    if (!flag) return false;
+    const value = flag.variant ?? flag.enabled;
+    this.trackExposure(key, value);
+    return value;
+  }
+
+  isFeatureEnabled(key: string): boolean {
+    const flag = this.flags[key];
+    if (!flag) return false;
+    this.trackExposure(key, flag.variant ?? flag.enabled);
+    return flag.enabled;
+  }
+
+  /**
+   * Emits `$feature_flag_called` once per (key, value) per identity session.
+   * Only a read of a loaded, known flag is an exposure - the `false` returned
+   * for an unknown key or before load is a default, not an exposure.
+   */
+  private trackExposure(key: string, value: boolean | string): void {
+    if (!this.sendExposureEvents || !this.flagsLoaded) return;
+    const dedupKey = `${key}:${String(value)}`;
+    if (this.exposedFlags.has(dedupKey)) return;
+    this.exposedFlags.add(dedupKey);
+    this.track("$feature_flag_called", {
+      $feature_flag: key,
+      $feature_flag_response: value,
+    });
+  }
+
+  getFeatureFlagPayload(key: string): unknown | null {
+    return this.flags[key]?.payload ?? null;
+  }
+
+  /**
+   * Subscribe to flag updates. `cb` fires after every successful reload, and
+   * immediately when flags are already loaded. Returns an unsubscribe function.
+   */
+  onFeatureFlags(cb: (flags: Record<string, FlagResult>) => void): () => void {
+    this.flagListeners.add(cb);
+    if (this.flagsLoaded) {
+      try {
+        cb(this.flags);
+      } catch {
+        // Same contract as emitFlags: a throwing listener is contained.
+      }
+    }
+    return () => {
+      this.flagListeners.delete(cb);
+    };
   }
 
   private queueEngage(payload: EngagePayload): void {

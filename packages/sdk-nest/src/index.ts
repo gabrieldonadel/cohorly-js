@@ -1,6 +1,6 @@
+export { COHORLY_MODULE_OPTIONS } from "./cohorly.constants.js";
 export { CohorlyModule } from "./cohorly.module.js";
 export { CohorlyService } from "./cohorly.service.js";
-export { COHORLY_MODULE_OPTIONS } from "./cohorly.constants.js";
 export type {
   CohorlyModuleAsyncOptions,
   CohorlyModuleOptions,

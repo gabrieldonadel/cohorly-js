@@ -1,5 +1,5 @@
 import { CohorlyClient } from "./client.js";
-import type { CohorlyOptions, Properties } from "./types.js";
+import type { CohorlyOptions, FlagResult, Properties } from "./types.js";
 
 export { CohorlyClient, TransportError } from "./client.js";
 export { InMemoryStorage } from "./storage.js";
@@ -8,6 +8,7 @@ export type {
   AsyncStorageLike,
   CohorlyOptions,
   EngagePayload,
+  FlagResult,
   PlatformInfo,
   Properties,
   TrackEvent,
@@ -78,6 +79,34 @@ export function clearTimedEvent(event: string): void {
 
 export function clearTimedEvents(): void {
   client().clearTimedEvents();
+}
+
+/** Re-evaluate feature flags for the current distinct id. Never rejects. */
+export function reloadFeatureFlags(): Promise<void> {
+  return client().reloadFeatureFlags();
+}
+
+/** Variant key if the flag has one, else its enabled boolean; false when unknown/not loaded. */
+export function getFeatureFlag(key: string): boolean | string {
+  return client().getFeatureFlag(key);
+}
+
+export function isFeatureEnabled(key: string): boolean {
+  return client().isFeatureEnabled(key);
+}
+
+export function getFeatureFlagPayload(key: string): unknown | null {
+  return client().getFeatureFlagPayload(key);
+}
+
+/**
+ * Subscribe to flag updates. Fires after every successful reload, and
+ * immediately if flags are already loaded. Returns an unsubscribe function.
+ */
+export function onFeatureFlags(
+  cb: (flags: Record<string, FlagResult>) => void,
+): () => void {
+  return client().onFeatureFlags(cb);
 }
 
 export const people = {

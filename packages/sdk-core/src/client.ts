@@ -1,8 +1,10 @@
-import { fetchTransport, TransportError } from "./transport.js";
+import { fetchFlagsFetcher, fetchTransport, TransportError } from "./transport.js";
 import type {
   CohorlyClientOptions,
   CohorlyStorage,
   CohorlyTransport,
+  FlagResult,
+  FlagsFetcher,
   PeopleProperties,
   TrackedEvent,
 } from "./types.js";
@@ -14,12 +16,23 @@ const KEY_ANONYMOUS = "cohorly_anonymous";
 const KEY_SUPER_PROPS = "cohorly_super_props";
 const KEY_QUEUE = "cohorly_queue";
 const KEY_TIMED_EVENTS = "cohorly_timed_events";
+const KEY_FLAGS = "chl_flags";
 
 /** Cohorly's hosted ingestion API. Used when no apiHost is supplied. */
 const DEFAULT_API_HOST = "https://cohorly-service.velloalabs.com";
 const DEFAULT_MAX_QUEUE_SIZE = 1000;
 const DEFAULT_MAX_RETRY_DELAY_MS = 10 * 60 * 1000; // 10 minutes
 const BACKOFF_BASE_MS = 2000;
+
+/**
+ * Persisted flag cache. `distinct_id` scopes the cache: on load it is
+ * discarded when it does not match the current distinct id, so different
+ * users never see each other's flags.
+ */
+interface FlagsCache {
+  distinct_id: string;
+  flags: Record<string, FlagResult>;
+}
 
 /**
  * Transport/storage-agnostic analytics client. Platform SDKs (web, react-native, node)
@@ -58,6 +71,22 @@ export class CohorlyClient {
   /** Current effective per-flush batch size; halved on 413 (floor 1). */
   private effectiveBatchSize: number;
 
+  private readonly fetcher: FlagsFetcher;
+  /** Last known flag results for the current distinct id (memory copy of the cache). */
+  private flags: Record<string, FlagResult> = {};
+  /** True once flags were loaded (from cache or a successful reload). */
+  private flagsLoaded = false;
+  private flagRequestSeq = 0;
+  private readonly flagListeners = new Set<
+    (flags: Record<string, FlagResult>) => void
+  >();
+  private readonly sendExposureEvents: boolean;
+  /**
+   * Flag exposures already tracked this identity session, keyed
+   * `${key}:${String(value)}`. In memory only, cleared on identify()/reset().
+   */
+  private readonly exposedFlags = new Set<string>();
+
   readonly people: PeopleProperties;
 
   constructor(options: CohorlyClientOptions) {
@@ -93,6 +122,18 @@ export class CohorlyClient {
     } else {
       this.deviceId = this.anonymous ? this.distinctId : uuid();
       this.storage.set(KEY_DEVICE_ID, this.deviceId);
+    }
+
+    this.fetcher = options.fetcher ?? fetchFlagsFetcher;
+    this.sendExposureEvents = options.sendExposureEvents ?? true;
+    // Load the persisted flag cache, but only when it belongs to the current
+    // distinct id - a different user's cache is discarded, never served.
+    const flagsCache = this.readJson<FlagsCache | null>(KEY_FLAGS, null);
+    if (flagsCache && flagsCache.distinct_id === this.distinctId) {
+      this.flags = flagsCache.flags ?? {};
+      this.flagsLoaded = true;
+    } else if (flagsCache) {
+      this.storage.remove(KEY_FLAGS);
     }
 
     this.superProps = this.readJson(KEY_SUPER_PROPS, {});
@@ -195,8 +236,35 @@ export class CohorlyClient {
 
   async identify(id: string): Promise<void> {
     if (id === this.distinctId) return;
-    if (this.anonymous) {
-      const previousId = this.distinctId;
+
+    // Switch identity first, synchronously, before any network call. An
+    // offline or slow /alias POST must never block the switch: every
+    // track() issued while identify() is still in flight has to stamp the
+    // new id, not the stale anonymous one.
+    const previousId = this.distinctId;
+    const wasAnonymous = this.anonymous;
+    this.distinctId = id;
+    this.anonymous = false;
+    this.storage.set(KEY_DISTINCT_ID, this.distinctId);
+    this.storage.set(KEY_ANONYMOUS, "0");
+
+    // Flags are per-identity: drop the previous identity's cache before the
+    // refresh (a slow or failed reload must not keep serving the old user's
+    // variants to the new id), and let the new identity record its own
+    // exposures.
+    this.flags = {};
+    this.flagsLoaded = false;
+    this.exposedFlags.clear();
+    this.storage.remove(KEY_FLAGS);
+    void this.reloadFeatureFlags();
+
+    // Only link when the previous id was itself anonymous - an already
+    // identified id is never re-aliased. This POST is now best-effort: it
+    // stays awaited so callers/tests can observe completion, but a failure
+    // is self-healing, since the server also links $device_id to $user_id
+    // implicitly from any later event that carries both, so a dropped alias
+    // call just delays the link rather than losing it.
+    if (wasAnonymous) {
       try {
         await this.transport(`${this.apiHost}/alias`, {
           alias: previousId,
@@ -207,10 +275,6 @@ export class CohorlyClient {
         this.log("alias request failed", err);
       }
     }
-    this.distinctId = id;
-    this.anonymous = false;
-    this.storage.set(KEY_DISTINCT_ID, this.distinctId);
-    this.storage.set(KEY_ANONYMOUS, "0");
   }
 
   reset(): void {
@@ -221,6 +285,109 @@ export class CohorlyClient {
     this.storage.set(KEY_DEVICE_ID, this.deviceId);
     this.storage.set(KEY_ANONYMOUS, "1");
     this.clearTimedEvents();
+    // Flags are per-identity: the previous identity's flags must not be
+    // served to the new anonymous id, so drop them before the refresh.
+    this.flags = {};
+    this.flagsLoaded = false;
+    this.exposedFlags.clear();
+    this.storage.remove(KEY_FLAGS);
+    void this.reloadFeatureFlags();
+  }
+
+  /**
+   * Re-evaluate feature flags for the current distinct id via
+   * POST /flags/evaluate, caching the result in memory and storage
+   * (key `chl_flags`, scoped by distinct id). Errors are swallowed - the
+   * stale cache is kept and no rejection escapes.
+   */
+  async reloadFeatureFlags(): Promise<void> {
+    const requestedId = this.distinctId;
+    const seq = ++this.flagRequestSeq;
+    const res = await this.fetcher(`${this.apiHost}/flags/evaluate`, {
+      distinct_id: requestedId,
+      ...(this.token !== undefined ? { token: this.token } : {}),
+    });
+    // Identity changed, or a newer reload was started, while this request was
+    // in flight: these results are stale, discard them.
+    if (requestedId !== this.distinctId || seq !== this.flagRequestSeq) return;
+    const flags = (res as { flags?: unknown } | undefined)?.flags;
+    if (!flags || typeof flags !== "object") {
+      this.log("flag reload failed, keeping stale flags");
+      return;
+    }
+    this.flags = flags as Record<string, FlagResult>;
+    this.flagsLoaded = true;
+    this.storage.set(
+      KEY_FLAGS,
+      JSON.stringify({
+        distinct_id: requestedId,
+        flags: this.flags,
+      } satisfies FlagsCache),
+    );
+    for (const cb of this.flagListeners) {
+      try {
+        cb(this.flags);
+      } catch (err) {
+        this.log("onFeatureFlags listener threw", err);
+      }
+    }
+  }
+
+  /**
+   * The flag's variant key when it has one, else its enabled boolean.
+   * `false` for unknown flags or before flags are loaded.
+   */
+  getFeatureFlag(key: string): boolean | string {
+    const flag = this.flags[key];
+    if (!flag) return false;
+    const value = flag.variant ?? flag.enabled;
+    this.trackExposure(key, value);
+    return value;
+  }
+
+  isFeatureEnabled(key: string): boolean {
+    const flag = this.flags[key];
+    if (!flag) return false;
+    this.trackExposure(key, flag.variant ?? flag.enabled);
+    return flag.enabled;
+  }
+
+  /**
+   * Emit `$feature_flag_called` once per (key, value) per identity session.
+   * Only real reads of a loaded, known flag count as an exposure - the `false`
+   * returned for an unknown key or before load is a default, not an exposure.
+   */
+  private trackExposure(key: string, value: boolean | string): void {
+    if (!this.sendExposureEvents || !this.flagsLoaded) return;
+    const dedupKey = `${key}:${String(value)}`;
+    if (this.exposedFlags.has(dedupKey)) return;
+    this.exposedFlags.add(dedupKey);
+    this.track("$feature_flag_called", {
+      $feature_flag: key,
+      $feature_flag_response: value,
+    });
+  }
+
+  getFeatureFlagPayload(key: string): unknown | null {
+    return this.flags[key]?.payload ?? null;
+  }
+
+  /**
+   * Subscribe to flag updates. `cb` fires after every successful reload, and
+   * immediately when flags are already loaded. Returns an unsubscribe function.
+   */
+  onFeatureFlags(cb: (flags: Record<string, FlagResult>) => void): () => void {
+    this.flagListeners.add(cb);
+    if (this.flagsLoaded) {
+      try {
+        cb(this.flags);
+      } catch (err) {
+        this.log("onFeatureFlags listener threw", err);
+      }
+    }
+    return () => {
+      this.flagListeners.delete(cb);
+    };
   }
 
   register(props: Record<string, unknown>): void {

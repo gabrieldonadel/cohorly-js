@@ -1,4 +1,4 @@
-import type { CohorlyTransport } from "./types.js";
+import type { CohorlyTransport, FlagsFetcher } from "./types.js";
 
 /**
  * Error thrown by transports on a non-OK HTTP response. Carries the HTTP
@@ -55,5 +55,25 @@ export const fetchTransport: CohorlyTransport = async (url, body) => {
       parseRetryAfterMs(res.headers.get("retry-after")),
       `cohorly: request to ${url} failed with status ${res.status}`,
     );
+  }
+};
+
+/**
+ * Default feature-flags fetcher: POST JSON via fetch, parse the JSON response.
+ * Resolves `undefined` on ANY failure (network, non-2xx, invalid JSON) so a
+ * failed flag reload never throws into the caller - the client just keeps its
+ * stale cache.
+ */
+export const fetchFlagsFetcher: FlagsFetcher = async (url, body) => {
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return undefined;
+    return await res.json();
+  } catch {
+    return undefined;
   }
 };

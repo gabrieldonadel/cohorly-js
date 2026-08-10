@@ -2,18 +2,39 @@ import { CohorlyNode } from "./client.js";
 import type { CohorlyConfig } from "./types.js";
 
 export { CohorlyNode, SERVER_MAX_BATCH } from "./client.js";
-export { TransportError, parseRetryAfterMs, fetchTransport } from "./transport.js";
-export { LIB_VERSION } from "./version.js";
+export { FlagDefinitionsPoller } from "./definitions.js";
+export {
+  evaluateFlagLocally,
+  flagBucket,
+  flagVariantHash,
+} from "./local-eval.js";
+export {
+  fetchDefinitionsFetcher,
+  fetchJsonFetcher,
+  fetchTransport,
+  parseRetryAfterMs,
+  TransportError,
+} from "./transport.js";
 export type {
   BatchEventInput,
   Callback,
   CohorlyConfig,
+  CohorlyFetcher,
+  CohorlyFlags,
+  CohorlyGetFetcher,
   CohorlyPeople,
   CohorlyTransport,
   EngagePayload,
+  FlagCallOptions,
+  FlagDefinition,
+  FlagResult,
+  FlagRule,
+  FlagsCallback,
+  FlagVariant,
   Properties,
   TrackEvent,
 } from "./types.js";
+export { LIB_VERSION } from "./version.js";
 
 /**
  * Create a Cohorly client, mirroring mixpanel-node's `Mixpanel.init`:
